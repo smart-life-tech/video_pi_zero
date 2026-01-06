@@ -205,13 +205,13 @@ def resolve_video_path(filename: str) -> str:
 
 def play_video(path_or_filename: str):
     path = resolve_video_path(path_or_filename)
-    # Stop any currently playing video to allow smooth transition
-    if list_player.is_playing():
-        list_player.stop()
-        time.sleep(0.1)  # Brief pause to ensure VLC releases the previous video
+    # Create and set the new media list BEFORE playing
+    # This avoids a blank screen glitch when switching videos
     media_list = vlc_instance.media_list_new()
     media_list.add_media(path)
     list_player.set_media_list(media_list)
+    
+    # Now play (which automatically transitions from old to new without gap)
     list_player.play()
     print(f"Video started: {path}")
 
