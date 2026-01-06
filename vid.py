@@ -246,20 +246,27 @@ def keyboard_loop():
     try:
         import keyboard
         print("Keyboard mode (Windows, global listener): A=Process, B=Place, C=Warning, D=Stop, Q=Quit")
+        print("DEBUG: keyboard module loaded. Press any key (should print below)...")
         _quit_flag = False
         
         def on_key(event):
             nonlocal _quit_flag
-            key = event.name.lower()
-            if key == 'a':
+            key_name = event.name.lower()
+            print(f"DEBUG: Key pressed: '{key_name}' (type: {event.event_type})")
+            
+            if key_name == 'a':
+                print("DEBUG: Detected A - playing Process")
                 button_pressed_17()
-            elif key == 'b':
+            elif key_name == 'b':
+                print("DEBUG: Detected B - playing Place")
                 button_pressed_27()
-            elif key == 'c':
+            elif key_name == 'c':
+                print("DEBUG: Detected C - playing Warning")
                 button_pressed_22()
-            elif key == 'd':
+            elif key_name == 'd':
+                print("DEBUG: Detected D - stopping")
                 button_pressed_4()
-            elif key == 'q':
+            elif key_name == 'q':
                 print("Quitting...")
                 _quit_flag = True
         
