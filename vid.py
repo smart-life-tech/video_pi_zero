@@ -176,13 +176,33 @@ else:
 
 # Initialize VLC
 vlc_instance = vlc.Instance()
-list_player = vlc_instance.media_list_player_new()
-list_player.set_playback_mode(vlc.PlaybackMode(1))
 media_player = vlc_instance.media_player_new()
 media_player.set_fullscreen(True)
+list_player = vlc_instance.media_list_player_new()
 list_player.set_media_player(media_player)
+list_player.set_playback_mode(vlc.PlaybackMode(0))  # Loop mode
 
+# Pre-load all video media objects for instant switching
+def _preload_videos():
+    """Load all video paths once at startup and add to list_player for seamless switching."""
+    video_map = {}
+    media_list = vlc_instance.media_list_new()
+    video_files = ["Process.mp4", "Place.mp4", "Warning.mp4"]
+    
+    for idx, filename in enumerate(video_files):
+        path = resolve_video_path(filename)
+        try:
+            media = vlc_instance.media_new(path)
+            media_list.add_media(media)
+            video_map[filename] = idx
+            print(f"Preloaded [{idx}]: {filename} -> {path}")
+        except Exception as e:
+            print(f"Failed to preload {filename}: {e}")
+    
+    list_player.set_media_list(media_list)
+    return video_map
 
+# Resolve paths first, then preload
 def resolve_video_path(filename: str) -> str:
     """Resolve a video path across environments (Windows test, Pi runtime).
 
@@ -202,22 +222,23 @@ def resolve_video_path(filename: str) -> str:
             return p
     return filename
 
+# Call after vlc_instance is ready
+video_indices = _preload_videos()
+
 
 def play_video(path_or_filename: str):
-    path = resolve_video_path(path_or_filename)
-    # Create and set the new media list BEFORE playing
-    # This avoids a blank screen glitch when switching videos
-    media_list = vlc_instance.media_list_new()
-    media_list.add_media(path)
-    list_player.set_media_list(media_list)
-    
-    # Now play (which automatically transitions from old to new without gap)
-    list_player.play()
-    print(f"Video started: {path}")
+    """Jump to a preloaded video by filename. Seamless, no glitch."""
+    if path_or_filename not in video_indices:
+        print(f"Error: {path_or_filename} not found in preloaded videos")
+        return
+    idx = video_indices[path_or_filename]
+    # Use list_player to jump to specific video without stopping
+    list_player.play_item_at_index(idx)
+    print(f"Switched to: {path_or_filename}")
 
 
 def exit_vlc():
-    media_player.stop()
+    list_player.stop()
     print("Exit vlc")
 
 
