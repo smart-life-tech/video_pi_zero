@@ -238,17 +238,19 @@ def button_pressed_4():
 
 
 def keyboard_loop():
-    if not sys.platform.startswith("win") or msvcrt is None:
-        print("Keyboard loop not available on this platform.")
+    if not sys.platform.startswith("win"):
+        print("Keyboard mode not available on this platform.")
         return
-    print("Keyboard mode (Windows): A=Process, B=Place, C=Warning, D=Stop, Q=Quit")
-    while True:
-        if msvcrt.kbhit():
-            ch = msvcrt.getch()
-            try:
-                key = ch.decode("utf-8").lower()
-            except Exception:
-                continue
+    
+    # Try to use global keyboard listener (works in fullscreen)
+    try:
+        import keyboard
+        print("Keyboard mode (Windows, global listener): A=Process, B=Place, C=Warning, D=Stop, Q=Quit")
+        _quit_flag = False
+        
+        def on_key(event):
+            nonlocal _quit_flag
+            key = event.name.lower()
             if key == 'a':
                 button_pressed_17()
             elif key == 'b':
@@ -259,8 +261,41 @@ def keyboard_loop():
                 button_pressed_4()
             elif key == 'q':
                 print("Quitting...")
-                break
-        time.sleep(0.03)
+                _quit_flag = True
+        
+        keyboard.on_press(on_key)
+        print("Press A/B/C/D or Q. Listening globally (even in fullscreen)...")
+        
+        # Keep running until Q is pressed
+        while not _quit_flag:
+            time.sleep(0.1)
+        keyboard.unhook_all()
+    except ImportError:
+        # Fallback to msvcrt if keyboard module not available
+        print("Note: 'keyboard' module not installed. Keyboard input only works when console has focus.")
+        print("Install it with: pip install keyboard")
+        print("Keyboard mode (Windows, console only): A=Process, B=Place, C=Warning, D=Stop, Q=Quit")
+        if msvcrt is None:
+            return
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                try:
+                    key = ch.decode("utf-8").lower()
+                except Exception:
+                    continue
+                if key == 'a':
+                    button_pressed_17()
+                elif key == 'b':
+                    button_pressed_27()
+                elif key == 'c':
+                    button_pressed_22()
+                elif key == 'd':
+                    button_pressed_4()
+                elif key == 'q':
+                    print("Quitting...")
+                    break
+            time.sleep(0.03)
 
 
 def main():
