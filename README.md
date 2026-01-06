@@ -25,12 +25,32 @@ pip install gpiozero python-vlc
 
 ## Usage
 
+### On Raspberry Pi (GPIO)
+
 Run the script:
 ```bash
-python sendto_fiv.py
+python sendto\ fiv.py
 ```
 
 The program will wait for button presses and play the corresponding videos from `/home/helmwash/Videos/`.
+
+### On Windows (Keyboard Test Mode)
+
+Place your test videos as any of:
+- `./Videos/Process.mp4`, `./Videos/Place.mp4`, `./Videos/Warning.mp4`
+- Or any accessible absolute/relative path and update filenames if needed
+
+Run the script:
+```bash
+python "sendto fiv.py"
+```
+
+Controls in the console:
+- `A`: Play Process.mp4
+- `B`: Play Place.mp4
+- `C`: Play Warning.mp4
+- `D`: Stop playback
+- `Q`: Quit program
 
 ## Button Map
 
@@ -43,7 +63,12 @@ The program will wait for button presses and play the corresponding videos from 
 
 ## Video Paths
 
-Update the video paths in the button handler functions as needed:
+The app resolves paths in this order:
+1) As provided (relative/absolute)
+2) `./Videos/<filename>` (relative to current working directory)
+3) `/home/helmwash/Videos/<filename>` (Pi default)
+
+Default filenames used:
 - `button_pressed_17()`: Process.mp4
 - `button_pressed_27()`: Place.mp4
 - `button_pressed_22()`: Warning.mp4
