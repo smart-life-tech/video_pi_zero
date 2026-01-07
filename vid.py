@@ -1,6 +1,8 @@
 import os
 import sys
 import time
+import threading
+import tkinter as tk
 try:
     from signal import pause  # Unix-only; optional
 except Exception:
@@ -177,7 +179,7 @@ else:
 # Initialize VLC
 vlc_instance = vlc.Instance()
 media_player = vlc_instance.media_player_new()
-media_player.set_fullscreen(True)
+media_player.set_fullscreen(False)
 list_player = vlc_instance.media_list_player_new()
 list_player.set_media_player(media_player)
 list_player.set_playback_mode(vlc.PlaybackMode(0))  # Loop mode
@@ -226,14 +228,42 @@ def resolve_video_path(filename: str) -> str:
 video_indices = _preload_videos()
 
 
+def init_video_window():
+    """Create a borderless fullscreen window and embed VLC output into it (Windows)."""
+    if not sys.platform.startswith("win"):
+        return None
+    root = tk.Tk()
+    root.title("Video Player")
+    root.configure(bg="black")
+    root.attributes("-fullscreen", True)
+    root.attributes("-topmost", True)
+    # Ensure the window covers the entire screen without borders
+    root.overrideredirect(True)
+    # Bind Escape key to quit (backup method)
+    root.bind("<Escape>", lambda e: root.destroy())
+    hwnd = root.winfo_id()
+    try:
+        media_player.set_hwnd(hwnd)
+    except Exception as e:
+        print(f"Failed to set VLC hwnd: {e}")
+    return root
+
+
 def play_video(path_or_filename: str):
     """Jump to a preloaded video by filename. Seamless, no glitch."""
     if path_or_filename not in video_indices:
         print(f"Error: {path_or_filename} not found in preloaded videos")
         return
     idx = video_indices[path_or_filename]
-    # Use list_player to jump to specific video without stopping
+    # Pause current playback to keep vout, then jump and seek to 0 for clean switch
+    if list_player.is_playing():
+        media_player.pause()
     list_player.play_item_at_index(idx)
+    try:
+        media_player.set_time(0)
+    except Exception:
+        pass
+    media_player.play()
     print(f"Switched to: {path_or_filename}")
 
 
@@ -259,10 +289,11 @@ def button_pressed_22():
 
 def button_pressed_4():
     print("Button 4 was pressed!")
-    exit_vlc()
+    # Play a clip instead of stopping to avoid display glitch
+    play_video("Warning.mp4")
 
 
-def keyboard_loop():
+def keyboard_loop(root=None):
     if not sys.platform.startswith("win"):
         print("Keyboard mode not available on this platform.")
         return
@@ -270,7 +301,7 @@ def keyboard_loop():
     # Try to use global keyboard listener (works in fullscreen)
     try:
         import keyboard
-        print("Keyboard mode (Windows, global listener): A=Process, B=Place, C=Warning, D=Stop, Q=Quit")
+        print("Keyboard mode (Windows, global listener): A=Process, B=Place, C=Warning, D=Stop, Q/Esc=Quit")
         print("DEBUG: keyboard module loaded. Press any key (should print below)...")
         _quit_flag = False
         
@@ -291,12 +322,18 @@ def keyboard_loop():
             elif key_name == 'd':
                 print("DEBUG: Detected D - stopping")
                 button_pressed_4()
-            elif key_name == 'q':
+            elif key_name in ('q', 'esc'):
                 print("Quitting...")
                 _quit_flag = True
+                if root is not None:
+                    try:
+                        root.quit()
+                        root.destroy()
+                    except Exception:
+                        pass
         
         keyboard.on_press(on_key)
-        print("Press A/B/C/D or Q. Listening globally (even in fullscreen)...")
+        print("Press A/B/C/D or Q/Esc to quit. Listening globally (even in fullscreen)...")
         
         # Keep running until Q is pressed
         while not _quit_flag:
@@ -347,7 +384,18 @@ def main():
         print("Waiting for GPIO button presses...")
         pause()  # Keep the script running indefinitely
     else:
-        keyboard_loop()
+        # Windows: create window and run keyboard listener in background
+        root = init_video_window()
+        t = threading.Thread(target=lambda: keyboard_loop(root), daemon=True)
+        t.start()
+        if root is not None:
+            try:
+                root.mainloop()
+            except KeyboardInterrupt:
+                pass
+        else:
+            # Fallback if window not created
+            keyboard_loop(None)
 
 
 if __name__ == "__main__":

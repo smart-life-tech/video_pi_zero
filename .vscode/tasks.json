@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Apply seamless pause/play edits",
+			"type": "shell",
+			"command": "echo Patching vid.py for pause/play seamless switching",
+			"args": [],
+			"isBackground": false
+		}
+	]
+}
