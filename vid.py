@@ -2,11 +2,16 @@ import os
 import sys
 import time
 import threading
-import tkinter as tk
 try:
     from signal import pause  # Unix-only; optional
 except Exception:
     pause = None
+
+# Tkinter for Windows embedding only
+if sys.platform.startswith("win"):
+    import tkinter as tk
+else:
+    tk = None
 
 # On Windows, try to locate VLC so python-vlc can find libvlc.dll
 def _setup_vlc_windows():
@@ -179,7 +184,11 @@ else:
 # Initialize VLC
 vlc_instance = vlc.Instance()
 media_player = vlc_instance.media_player_new()
-media_player.set_fullscreen(False)
+# Fullscreen on Pi; windowed on Windows for Tkinter embedding
+if not sys.platform.startswith("win"):
+    media_player.set_fullscreen(True)  # Pi/Linux: use VLC fullscreen
+else:
+    media_player.set_fullscreen(False)  # Windows: embed in Tkinter window
 list_player = vlc_instance.media_list_player_new()
 list_player.set_media_player(media_player)
 list_player.set_playback_mode(vlc.PlaybackMode(0))  # Loop mode
@@ -229,8 +238,8 @@ video_indices = _preload_videos()
 
 
 def init_video_window():
-    """Create a borderless fullscreen window and embed VLC output into it (Windows)."""
-    if not sys.platform.startswith("win"):
+    """Create a borderless fullscreen window and embed VLC output into it (Windows only)."""
+    if not sys.platform.startswith("win") or tk is None:
         return None
     root = tk.Tk()
     root.title("Video Player")
