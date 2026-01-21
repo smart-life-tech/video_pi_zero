@@ -16,7 +16,8 @@ else:
 # On Windows, try to locate VLC so python-vlc can find libvlc.dll
 def _setup_vlc_windows():
     if not sys.platform.startswith("win"):
-        return False, []
+        # On Pi/Linux, skip Windows setup but return 4-tuple for unpacking compatibility
+        return False, [], None, None
     candidates = []
     tried = []
     # Highest priority: explicit folder via CLI or env
@@ -88,7 +89,11 @@ def _setup_vlc_windows():
                 continue
     return added, tried, selected, selected_dll
 
-_vlc_added, _vlc_tried, _vlc_dir, _vlc_dll = _setup_vlc_windows()
+if sys.platform.startswith("win"):
+    _vlc_added, _vlc_tried, _vlc_dir, _vlc_dll = _setup_vlc_windows()
+else:
+    # Skip Windows-specific setup entirely on Pi/Linux
+    _vlc_added, _vlc_tried, _vlc_dir, _vlc_dll = (False, [], None, None)
 
 try:
     import vlc
@@ -228,12 +233,34 @@ def resolve_video_path(filename: str) -> str:
         os.path.join(os.getcwd(), "Videos", filename),
         os.path.join("/home/helmwash/Videos", filename),
     ]
+    
     for p in candidates:
         if os.path.exists(p):
             return p
     return filename
 
+# Startup check: confirm required video files are present and readable
+def check_startup_videos():
+    required = ["Process.mp4", "Place.mp4", "Warning.mp4"]
+    missing = []
+    for name in required:
+        path = resolve_video_path(name)
+        exists = os.path.exists(path)
+        readable = os.access(path, os.R_OK) if exists else False
+        if not exists:
+            print(f"Warning: {name} not found (resolved path: {path})")
+            missing.append(name)
+        elif not readable:
+            print(f"Warning: {name} not readable (path: {path})")
+            missing.append(name)
+        else:
+            print(f"Startup check OK: {name} -> {path}")
+    return missing
+
 # Call after vlc_instance is ready
+_missing = check_startup_videos()
+if _missing:
+    print("Startup check: missing/unreadable videos: " + ", ".join(_missing))
 video_indices = _preload_videos()
 
 
