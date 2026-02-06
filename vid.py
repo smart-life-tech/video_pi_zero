@@ -231,13 +231,17 @@ def resolve_video_path(filename: str) -> str:
 
     Tries, in order:
     - As-provided (relative/absolute)
+    - Script directory + filename (where vid.py is located)
     - ./Videos/<filename> relative to current working directory
-    - /home/helmwash/Videos/<filename> (Pi default)
+    - /home/helmwash/video_pi_zero/<filename> (Pi default)
     Returns the first existing path, otherwise returns the original filename.
     """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         filename,
+        os.path.join(script_dir, filename),
         os.path.join(os.getcwd(), "Videos", filename),
+        os.path.join("/home/helmwash/video_pi_zero", filename),
     ]
     
     for p in candidates:
