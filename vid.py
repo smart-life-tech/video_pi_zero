@@ -322,12 +322,12 @@ def exit_vlc():
 
 def button_pressed_17():
     print("Button 17 was pressed!")
-    play_video("Process step 2.mp4")
+    play_video("Process_step_2.mp4")
 
 
 def button_pressed_27():
     print("Button 27 was pressed!")
-    play_video("Guide steps.mp4")
+    play_video("Guide_steps.mp4")
 
 
 def button_pressed_22():
@@ -337,12 +337,12 @@ def button_pressed_22():
 
 def button_pressed_4():
     print("Button 4 was pressed!")
-    play_video("Process step 1 .mp4")
+    play_video("Process_step_1.mp4")
 
 
 def button_pressed_18():
     print("Button 18 was pressed!")
-    play_video("Process step 3.mp4")
+    play_video("Process_step_3.mp4")
 
 
 def keyboard_loop(root=None):
