@@ -187,8 +187,8 @@ else:
     except Exception:
         msvcrt = None
 
-# Initialize VLC
-vlc_instance = vlc.Instance()
+# Initialize VLC with audio disabled (avoids ALSA errors on Pi)
+vlc_instance = vlc.Instance('--no-audio', '--quiet')
 media_player = vlc_instance.media_player_new()
 # Fullscreen on Pi; windowed on Windows for Tkinter embedding
 if not sys.platform.startswith("win"):
@@ -282,8 +282,13 @@ video_indices = _preload_videos()
 
 def init_video_window():
     """Create a borderless fullscreen black window. 
-    On Windows: embed VLC via hwnd. On Pi: use as backdrop for VLC fullscreen."""
+    On Windows: embed VLC via hwnd. On Pi: VLC handles fullscreen directly, no Tkinter needed."""
     if tk is None:
+        return None
+    
+    # On Pi: Skip Tkinter window since VLC fullscreen works directly
+    if not sys.platform.startswith("win"):
+        print("Pi mode: VLC will use native fullscreen (no Tkinter window needed)")
         return None
     
     try:
@@ -305,12 +310,11 @@ def init_video_window():
         root.bind("<Escape>", lambda e: root.destroy())
         
         # On Windows: embed VLC into the window via hwnd
-        if sys.platform.startswith("win"):
-            hwnd = root.winfo_id()
-            try:
-                media_player.set_hwnd(hwnd)
-            except Exception as e:
-                print(f"Failed to set VLC hwnd: {e}")
+        hwnd = root.winfo_id()
+        try:
+            media_player.set_hwnd(hwnd)
+        except Exception as e:
+            print(f"Failed to set VLC hwnd: {e}")
         
         print(f"Fullscreen window created: {screen_width}x{screen_height}")
         return root
@@ -463,6 +467,10 @@ def main():
         button22.when_pressed = button_pressed_22
         button18.when_pressed = button_pressed_18
 
+        # Auto-play first video on startup
+        print("Auto-playing first video...")
+        play_video("Process_step_1.mp4")
+
         # Create black fullscreen window on Pi
         root = init_video_window()
         if root is not None:
@@ -477,6 +485,9 @@ def main():
             pause()  # Keep the script running indefinitely
     else:
         # Windows: create window and run keyboard listener in background
+        print("Auto-playing first video...")
+        play_video("Process_step_1.mp4")
+        
         root = init_video_window()
         t = threading.Thread(target=lambda: keyboard_loop(root), daemon=True)
         t.start()
