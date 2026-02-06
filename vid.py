@@ -486,7 +486,7 @@ def main():
     else:
         # Windows: create window and run keyboard listener in background
         print("Auto-playing first video...")
-        play_video("Process_step_1.mp4")
+        play_video("Guide_steps.mp4")  # Start with guide_steps for Windows demo
         
         root = init_video_window()
         t = threading.Thread(target=lambda: keyboard_loop(root), daemon=True)
