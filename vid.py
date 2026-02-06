@@ -204,11 +204,11 @@ def _preload_videos():
     video_map = {}
     media_list = vlc_instance.media_list_new()
     video_files = [
-        "Process step 1 .mp4",
-        "Process step 2.mp4",
-        "Guide steps.mp4",
+        "Process_step_1.mp4",
+        "Process_step_2.mp4",
+        "Guide_steps.mp4",
         "Warning.mp4",
-        "Process step 3.mp4",
+        "Process_step_3.mp4",
     ]
     
     for idx, filename in enumerate(video_files):
@@ -277,9 +277,11 @@ video_indices = _preload_videos()
 
 
 def init_video_window():
-    """Create a borderless fullscreen window and embed VLC output into it (Windows only)."""
-    if not sys.platform.startswith("win") or tk is None:
+    """Create a borderless fullscreen black window. 
+    On Windows: embed VLC via hwnd. On Pi: use as backdrop for VLC fullscreen."""
+    if tk is None:
         return None
+    
     root = tk.Tk()
     root.title("Video Player")
     root.configure(bg="black")
@@ -289,11 +291,15 @@ def init_video_window():
     root.overrideredirect(True)
     # Bind Escape key to quit (backup method)
     root.bind("<Escape>", lambda e: root.destroy())
-    hwnd = root.winfo_id()
-    try:
-        media_player.set_hwnd(hwnd)
-    except Exception as e:
-        print(f"Failed to set VLC hwnd: {e}")
+    
+    # On Windows: embed VLC into the window via hwnd
+    if sys.platform.startswith("win"):
+        hwnd = root.winfo_id()
+        try:
+            media_player.set_hwnd(hwnd)
+        except Exception as e:
+            print(f"Failed to set VLC hwnd: {e}")
+    
     return root
 
 
@@ -440,8 +446,18 @@ def main():
         button22.when_pressed = button_pressed_22
         button18.when_pressed = button_pressed_18
 
-        print("Waiting for GPIO button presses...")
-        pause()  # Keep the script running indefinitely
+        # Create black fullscreen window on Pi
+        root = init_video_window()
+        if root is not None:
+            print("Waiting for GPIO button presses (with black fullscreen)...")
+            try:
+                root.mainloop()
+            except KeyboardInterrupt:
+                pass
+        else:
+            # Fallback if window not created
+            print("Waiting for GPIO button presses...")
+            pause()  # Keep the script running indefinitely
     else:
         # Windows: create window and run keyboard listener in background
         root = init_video_window()
