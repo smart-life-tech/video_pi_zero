@@ -248,11 +248,11 @@ def resolve_video_path(filename: str) -> str:
 # Startup check: confirm required video files are present and readable
 def check_startup_videos():
     required = [
-        "Process step 1 .mp4",
-        "Process step 2.mp4",
-        "Guide steps.mp4",
+        "Process_step_1.mp4",
+        "Process_step_2.mp4",
+        "Guide_steps.mp4",
         "Warning.mp4",
-        "Process step 3.mp4",
+        "Process_step_3.mp4",
     ]
     missing = []
     for name in required:
