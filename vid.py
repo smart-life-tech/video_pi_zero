@@ -203,7 +203,13 @@ def _preload_videos():
     """Load all video paths once at startup and add to list_player for seamless switching."""
     video_map = {}
     media_list = vlc_instance.media_list_new()
-    video_files = ["Process.mp4", "Place.mp4", "Warning.mp4"]
+    video_files = [
+        "Process step 1 .mp4",
+        "Process step 2.mp4",
+        "Guide steps.mp4",
+        "Warning.mp4",
+        "Process step 3.mp4",
+    ]
     
     for idx, filename in enumerate(video_files):
         path = resolve_video_path(filename)
@@ -241,7 +247,13 @@ def resolve_video_path(filename: str) -> str:
 
 # Startup check: confirm required video files are present and readable
 def check_startup_videos():
-    required = ["Process.mp4", "Place.mp4", "Warning.mp4"]
+    required = [
+        "Process step 1 .mp4",
+        "Process step 2.mp4",
+        "Guide steps.mp4",
+        "Warning.mp4",
+        "Process step 3.mp4",
+    ]
     missing = []
     for name in required:
         path = resolve_video_path(name)
@@ -310,12 +322,12 @@ def exit_vlc():
 
 def button_pressed_17():
     print("Button 17 was pressed!")
-    play_video("Process.mp4")
+    play_video("Process step 2.mp4")
 
 
 def button_pressed_27():
     print("Button 27 was pressed!")
-    play_video("Place.mp4")
+    play_video("Guide steps.mp4")
 
 
 def button_pressed_22():
@@ -325,8 +337,12 @@ def button_pressed_22():
 
 def button_pressed_4():
     print("Button 4 was pressed!")
-    # Play a clip instead of stopping to avoid display glitch
-    play_video("Warning.mp4")
+    play_video("Process step 1 .mp4")
+
+
+def button_pressed_18():
+    print("Button 18 was pressed!")
+    play_video("Process step 3.mp4")
 
 
 def keyboard_loop(root=None):
@@ -337,7 +353,7 @@ def keyboard_loop(root=None):
     # Try to use global keyboard listener (works in fullscreen)
     try:
         import keyboard
-        print("Keyboard mode (Windows, global listener): A=Process, B=Place, C=Warning, D=Stop, Q/Esc=Quit")
+        print("Keyboard mode (Windows, global listener): A=Step1, B=Step2, C=Guide, D=Warning, E=Step3, Q/Esc=Quit")
         print("DEBUG: keyboard module loaded. Press any key (should print below)...")
         _quit_flag = False
         
@@ -347,17 +363,20 @@ def keyboard_loop(root=None):
             print(f"DEBUG: Key pressed: '{key_name}' (type: {event.event_type})")
             
             if key_name == 'a':
-                print("DEBUG: Detected A - playing Process")
-                button_pressed_17()
-            elif key_name == 'b':
-                print("DEBUG: Detected B - playing Place")
-                button_pressed_27()
-            elif key_name == 'c':
-                print("DEBUG: Detected C - playing Warning")
-                button_pressed_22()
-            elif key_name == 'd':
-                print("DEBUG: Detected D - stopping")
+                print("DEBUG: Detected A - playing Step 1")
                 button_pressed_4()
+            elif key_name == 'b':
+                print("DEBUG: Detected B - playing Step 2")
+                button_pressed_17()
+            elif key_name == 'c':
+                print("DEBUG: Detected C - playing Guide")
+                button_pressed_27()
+            elif key_name == 'd':
+                print("DEBUG: Detected D - playing Warning")
+                button_pressed_22()
+            elif key_name == 'e':
+                print("DEBUG: Detected E - playing Step 3")
+                button_pressed_18()
             elif key_name in ('q', 'esc'):
                 print("Quitting...")
                 _quit_flag = True
@@ -369,7 +388,7 @@ def keyboard_loop(root=None):
                         pass
         
         keyboard.on_press(on_key)
-        print("Press A/B/C/D or Q/Esc to quit. Listening globally (even in fullscreen)...")
+        print("Press A/B/C/D/E or Q/Esc to quit. Listening globally (even in fullscreen)...")
         
         # Keep running until Q is pressed
         while not _quit_flag:
@@ -390,13 +409,15 @@ def keyboard_loop(root=None):
                 except Exception:
                     continue
                 if key == 'a':
-                    button_pressed_17()
-                elif key == 'b':
-                    button_pressed_27()
-                elif key == 'c':
-                    button_pressed_22()
-                elif key == 'd':
                     button_pressed_4()
+                elif key == 'b':
+                    button_pressed_17()
+                elif key == 'c':
+                    button_pressed_27()
+                elif key == 'd':
+                    button_pressed_22()
+                elif key == 'e':
+                    button_pressed_18()
                 elif key == 'q':
                     print("Quitting...")
                     break
@@ -405,17 +426,19 @@ def keyboard_loop(root=None):
 
 def main():
     if HAS_GPIO:
-        # Define the GPIO pin connected to the button (e.g., pin 17)
+        # Define GPIO buttons
+        button4 = Button(4)
         button17 = Button(17)
         button27 = Button(27)
         button22 = Button(22)
-        button4 = Button(4)
+        button18 = Button(18)
 
         # Assign callbacks
+        button4.when_pressed = button_pressed_4
         button17.when_pressed = button_pressed_17
         button27.when_pressed = button_pressed_27
         button22.when_pressed = button_pressed_22
-        button4.when_pressed = button_pressed_4
+        button18.when_pressed = button_pressed_18
 
         print("Waiting for GPIO button presses...")
         pause()  # Keep the script running indefinitely
