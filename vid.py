@@ -6,6 +6,7 @@ try:
     from signal import pause  # Unix-only; optional
 except Exception:
     pause = None
+# @reboot sleep 15 && DISPLAY=:0 XAUTHORITY=/home/helmwash/.Xauthority /usr/bin/python3 /home/helmwash/video_pi_zero/vid.py >> /home/helmwash/video_pi_zero/vid.log 2>&1
 
 # Tkinter for GUI (Windows embedding and Pi fullscreen backdrop)
 try:
