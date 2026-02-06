@@ -286,10 +286,17 @@ def init_video_window():
         root = tk.Tk()
         root.title("Video Player")
         root.configure(bg="black")
+        # Remove window decorations first
+        root.overrideredirect(True)
+        # Get screen dimensions
+        root.update_idletasks()
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        # Set window to cover entire screen
+        root.geometry(f"{screen_width}x{screen_height}+0+0")
+        # Try multiple fullscreen methods
         root.attributes("-fullscreen", True)
         root.attributes("-topmost", True)
-        # Ensure the window covers the entire screen without borders
-        root.overrideredirect(True)
         # Bind Escape key to quit (backup method)
         root.bind("<Escape>", lambda e: root.destroy())
         
@@ -301,6 +308,7 @@ def init_video_window():
             except Exception as e:
                 print(f"Failed to set VLC hwnd: {e}")
         
+        print(f"Fullscreen window created: {screen_width}x{screen_height}")
         return root
     except Exception as e:
         print(f"Warning: Could not create fullscreen window: {e}")
