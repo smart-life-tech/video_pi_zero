@@ -7,10 +7,10 @@ try:
 except Exception:
     pause = None
 
-# Tkinter for Windows embedding only
-if sys.platform.startswith("win"):
+# Tkinter for GUI (Windows embedding and Pi fullscreen backdrop)
+try:
     import tkinter as tk
-else:
+except ImportError:
     tk = None
 
 # On Windows, try to locate VLC so python-vlc can find libvlc.dll
