@@ -282,25 +282,30 @@ def init_video_window():
     if tk is None:
         return None
     
-    root = tk.Tk()
-    root.title("Video Player")
-    root.configure(bg="black")
-    root.attributes("-fullscreen", True)
-    root.attributes("-topmost", True)
-    # Ensure the window covers the entire screen without borders
-    root.overrideredirect(True)
-    # Bind Escape key to quit (backup method)
-    root.bind("<Escape>", lambda e: root.destroy())
-    
-    # On Windows: embed VLC into the window via hwnd
-    if sys.platform.startswith("win"):
-        hwnd = root.winfo_id()
-        try:
-            media_player.set_hwnd(hwnd)
-        except Exception as e:
-            print(f"Failed to set VLC hwnd: {e}")
-    
-    return root
+    try:
+        root = tk.Tk()
+        root.title("Video Player")
+        root.configure(bg="black")
+        root.attributes("-fullscreen", True)
+        root.attributes("-topmost", True)
+        # Ensure the window covers the entire screen without borders
+        root.overrideredirect(True)
+        # Bind Escape key to quit (backup method)
+        root.bind("<Escape>", lambda e: root.destroy())
+        
+        # On Windows: embed VLC into the window via hwnd
+        if sys.platform.startswith("win"):
+            hwnd = root.winfo_id()
+            try:
+                media_player.set_hwnd(hwnd)
+            except Exception as e:
+                print(f"Failed to set VLC hwnd: {e}")
+        
+        return root
+    except Exception as e:
+        print(f"Warning: Could not create fullscreen window: {e}")
+        print("Continuing with VLC fullscreen only (no Tkinter backdrop)...")
+        return None
 
 
 def play_video(path_or_filename: str):
