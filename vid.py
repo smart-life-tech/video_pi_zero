@@ -238,7 +238,6 @@ def resolve_video_path(filename: str) -> str:
     candidates = [
         filename,
         os.path.join(os.getcwd(), "Videos", filename),
-        os.path.join("/home/helmwash/Videos", filename),
     ]
     
     for p in candidates:
