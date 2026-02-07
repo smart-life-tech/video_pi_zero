@@ -523,13 +523,10 @@ def main():
         _GPIO_BUTTONS[18] = Button(18, bounce_time=0.05)
         print("GPIO 18 initialized")
 
-        # Assign callbacks
-        _GPIO_BUTTONS[4].when_pressed = button_pressed_4
-        _GPIO_BUTTONS[17].when_pressed = button_pressed_17
-        _GPIO_BUTTONS[27].when_pressed = button_pressed_27
-        _GPIO_BUTTONS[22].when_pressed = button_pressed_22
-        _GPIO_BUTTONS[18].when_pressed = button_pressed_18
-        print("All GPIO callbacks assigned")
+        print("All GPIO buttons initialized")
+
+        # Track button states for polling (detect transitions)
+        button_states = {4: False, 17: False, 27: False, 22: False, 18: False}
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
@@ -544,11 +541,30 @@ def main():
             except KeyboardInterrupt:
                 pass
         else:
-            # Fallback if window not created - keep thread responsive for button callbacks
+            # Fallback if window not created - poll buttons in main loop
             print("Waiting for GPIO button presses...")
             try:
                 while True:
-                    time.sleep(0.1)  # This allows button callbacks to fire, unlike pause()
+                    # Poll each button and detect press transitions
+                    for gpio_pin in [4, 17, 27, 22, 18]:
+                        current_state = _GPIO_BUTTONS[gpio_pin].is_pressed
+                        # Detect transition from not-pressed to pressed
+                        if current_state and not button_states[gpio_pin]:
+                            print(f"GPIO {gpio_pin} pressed!")
+                            # Call handler based on GPIO pin
+                            if gpio_pin == 4:
+                                button_pressed_4()
+                            elif gpio_pin == 17:
+                                button_pressed_17()
+                            elif gpio_pin == 18:
+                                button_pressed_18()
+                            elif gpio_pin == 22:
+                                button_pressed_22()
+                            elif gpio_pin == 27:
+                                button_pressed_27()
+                        button_states[gpio_pin] = current_state
+                    
+                    time.sleep(0.05)  # Poll every 50ms
             except KeyboardInterrupt:
                 print("Interrupted by user")
                 pass
