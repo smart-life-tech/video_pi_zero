@@ -2,12 +2,30 @@ import os
 import sys
 import time
 import threading
+import logging
 try:
     from signal import pause  # Unix-only; optional
 except Exception:
     pause = None
-#   @reboot sleep 15 && DISPLAY=:0 XAUTHORITY=/home/helmwash/.Xauthority /usr/bin/python3 /home/helmwash/video_pi_zero/vid.py >> /home/helmwash/video_pi_zero/vid.log 2>&1
 
+# Setup logging to file and console
+log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("Video Player started")
+
+# Redirect print to logging (optional - uncomment to use logging instead of print)
+# def print(*args, **kwargs):
+#     logger.info(' '.join(str(arg) for arg in args))
+
+#   @reboot sleep 15 && DISPLAY=:0 XAUTHORITY=/home/helmwash/.Xauthority /usr/bin/python3 /home/helmwash/video_pi_zero/vid.py >> /home/helmwash/video_pi_zero/vid.log 2>&1
 # Tkinter for GUI (Windows embedding and Pi fullscreen backdrop)
 try:
     import tkinter as tk
