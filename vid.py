@@ -544,9 +544,14 @@ def main():
             except KeyboardInterrupt:
                 pass
         else:
-            # Fallback if window not created
+            # Fallback if window not created - keep thread responsive for button callbacks
             print("Waiting for GPIO button presses...")
-            pause()  # Keep the script running indefinitely
+            try:
+                while True:
+                    time.sleep(0.1)  # This allows button callbacks to fire, unlike pause()
+            except KeyboardInterrupt:
+                print("Interrupted by user")
+                pass
     else:
         # Windows: create window and run keyboard listener in background
         print("Auto-playing first video...")
