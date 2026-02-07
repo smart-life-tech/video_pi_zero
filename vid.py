@@ -365,65 +365,77 @@ def exit_vlc():
     print("Exit vlc")
 
 
-# Track last button press time to prevent rapid re-triggering (debounce)
-last_any_button_press_time = 0  # Last time ANY button was pressed (global debounce)
-button_cooldown_seconds = 0.10  # Ignore all buttons for 5 seconds after ANY button press
+# Track process1 playback to apply 10-second input lockout after it starts
+process1_start_time = None  # Timestamp when Process_step_1 started
+process1_ignore_seconds = 10  # Ignore inputs for 10 seconds after Process_step_1 starts
+
+
+def is_process1_cooldown_active():
+    """Check if we're in the 10-second ignore window after Process_step_1 starts."""
+    global process1_start_time
+    if process1_start_time is None:
+        return False
+    elapsed = time.time() - process1_start_time
+    if elapsed < process1_ignore_seconds:
+        print(f"Process_step_1 ignore window: {elapsed:.1f}s/{process1_ignore_seconds}s")
+        return True
+    # Cooldown expired, reset
+    process1_start_time = None
+    return False
 
 
 def can_trigger_button(button_id):
-    """Check if we should allow a button press (global debounce - blocks ALL buttons for 5s)."""
-    global last_any_button_press_time
-    current_time = time.time()
-    time_since_last = current_time - last_any_button_press_time
-    if time_since_last < button_cooldown_seconds:
-        print(f"Button {button_id} blocked: {time_since_last:.1f}s of {button_cooldown_seconds}s global cooldown remaining")
+    """Check if button press is allowed (blocks input during Process_step_1 10s window)."""
+    if is_process1_cooldown_active():
+        print(f"Button {button_id} blocked: Process_step_1 cooldown active")
         return False
-    last_any_button_press_time = current_time
-    print(f"Button {button_id} triggered - starting {button_cooldown_seconds}s global cooldown")
     return True
 
 
 def button_pressed_17():
     print("Button 17 was pressed!")
     if can_trigger_button(17):
-        play_video("Process_step_2.mp4")
+        global process1_start_time
+        process1_start_time = time.time()  # Start 10s cooldown
+        play_video("Process_step_1.mp4")
     else:
-        print("Button 17 ignored (debouncing)...")
+        print("Button 17 ignored (Process_step_1 cooldown)...")  
 
 
 def button_pressed_27():
     print("Button 27 was pressed!")
     if can_trigger_button(27):
-        play_video("Guide_steps.mp4")
+        global process1_start_time
+        process1_start_time = time.time()  # Start 10s cooldown
+        play_video("Process_step_1.mp4")
     else:
-        print("Button 27 ignored (debouncing)...")
+        print("Button 27 ignored (Process_step_1 cooldown)...")
 
 
 def button_pressed_22():
-    print("Button 22 was pressed!")
-    if can_trigger_button(22):
-        play_video("Warning.mp4")
-    else:
-        print("Button 22 ignored (debouncing)...")
+    print("Button 22 was pressed - WARNING!")
+    # Warning is exempt from Process_step_1 cooldown
+    play_video("Warning.mp4")
 
 
 def button_pressed_4():
     print("Button 4 was pressed!")
     if can_trigger_button(4):
+        global process1_start_time
+        process1_start_time = time.time()  # Start 10s cooldown
         play_video("Process_step_1.mp4")
     else:
-        print("Button 4 ignored (debouncing)...")
+        print("Button 4 ignored (Process_step_1 cooldown)...")
 
 
 def button_pressed_18():
     print("Button 18 was pressed!")
     if can_trigger_button(18):
-        play_video("Process_step_3.mp4")
+        global process1_start_time
+        process1_start_time = time.time()  # Start 10s cooldown
+        play_video("Process_step_1.mp4")
     else:
-        print("Button 18 ignored (debouncing)...")
-
-
-def keyboard_loop(root=None):
+        print("Button 18 ignored (Process_step_1 cooldown)...")
     if not sys.platform.startswith("win"):
         print("Keyboard mode not available on this platform.")
         return
