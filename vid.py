@@ -366,21 +366,20 @@ def exit_vlc():
 
 
 # Track last button press time to prevent rapid re-triggering (debounce)
-last_button_press_times = {}  # Track each button separately
-button_cooldown_seconds = 0.2  # Ignore button presses within 0.2 seconds of last press for same button
+last_any_button_press_time = 0  # Last time ANY button was pressed (global debounce)
+button_cooldown_seconds = 5.0  # Ignore all buttons for 5 seconds after ANY button press
 
 
 def can_trigger_button(button_id):
-    """Check if we should allow a button press (debounce per button)."""
-    global last_button_press_times
+    """Check if we should allow a button press (global debounce - blocks ALL buttons for 5s)."""
+    global last_any_button_press_time
     current_time = time.time()
-    last_press = last_button_press_times.get(button_id, 0)
-    time_since_last = current_time - last_press
+    time_since_last = current_time - last_any_button_press_time
     if time_since_last < button_cooldown_seconds:
-        print(f"Button {button_id} debounced: {time_since_last:.3f}s since last press (need {button_cooldown_seconds}s)")
+        print(f"Button {button_id} blocked: {time_since_last:.1f}s of {button_cooldown_seconds}s global cooldown remaining")
         return False
-    last_button_press_times[button_id] = current_time
-    print(f"Button {button_id} triggered: {time_since_last:.3f}s since last press")
+    last_any_button_press_time = current_time
+    print(f"Button {button_id} triggered - starting {button_cooldown_seconds}s global cooldown")
     return True
 
 
@@ -554,14 +553,19 @@ def main():
                             # Call handler based on GPIO pin
                             if gpio_pin == 4:
                                 button_pressed_4()
+                                time.sleep(0.3)  # Short delay to allow media player to start
                             elif gpio_pin == 17:
                                 button_pressed_17()
+                                time.sleep(0.3)
                             elif gpio_pin == 18:
                                 button_pressed_18()
+                                time.sleep(0.3)
                             elif gpio_pin == 22:
                                 button_pressed_22()
+                                time.sleep(0.3)
                             elif gpio_pin == 27:
                                 button_pressed_27()
+                                time.sleep(0.3)
                         button_states[gpio_pin] = current_state
                     
                     time.sleep(0.05)  # Poll every 50ms
