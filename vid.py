@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 logger.info("Video Player started")
 
 # Redirect print to logging (optional - uncomment to use logging instead of print)
-# def print(*args, **kwargs):
-#     logger.info(' '.join(str(arg) for arg in args))
+def print(*args, **kwargs):
+    logger.info(' '.join(str(arg) for arg in args))
 
 #   @reboot sleep 15 && DISPLAY=:0 XAUTHORITY=/home/helmwash/.Xauthority /usr/bin/python3 /home/helmwash/video_pi_zero/vid.py >> /home/helmwash/video_pi_zero/vid.log 2>&1
 # Tkinter for GUI (Windows embedding and Pi fullscreen backdrop)
@@ -502,11 +502,11 @@ def keyboard_loop(root=None):
 def main():
     if HAS_GPIO:
         # Define GPIO buttons with debouncing (50ms is default, increase if needed)
-        button4 = Button(4, bounce_time=0.1)  # 100ms debounce
-        button17 = Button(17, bounce_time=0.1)
-        button27 = Button(27, bounce_time=0.1)
-        button22 = Button(22, bounce_time=0.1)
-        button18 = Button(18, bounce_time=0.1)
+        button4 = Button(4, bounce_time=1)  # 100ms debounce
+        button17 = Button(17, bounce_time=1)
+        button27 = Button(27, bounce_time=1)
+        button22 = Button(22, bounce_time=1)
+        button18 = Button(18, bounce_time=1)
 
         # Assign callbacks
         button4.when_pressed = button_pressed_4
