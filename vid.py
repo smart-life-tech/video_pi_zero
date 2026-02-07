@@ -367,7 +367,7 @@ def exit_vlc():
 
 # Track last button press time to prevent rapid re-triggering (debounce)
 last_button_press_times = {}  # Track each button separately
-button_cooldown_seconds = 0.2  # Ignore button presses within 0.2 seconds of last press for same button
+button_cooldown_seconds = 1  # Ignore button presses within 1 second of last press for same button
 
 
 def can_trigger_button(button_id):
@@ -375,12 +375,9 @@ def can_trigger_button(button_id):
     global last_button_press_times
     current_time = time.time()
     last_press = last_button_press_times.get(button_id, 0)
-    time_since_last = current_time - last_press
-    if time_since_last < button_cooldown_seconds:
-        print(f"Button {button_id} debounced: {time_since_last:.3f}s since last press (need {button_cooldown_seconds}s)")
+    if current_time - last_press < button_cooldown_seconds:
         return False
     last_button_press_times[button_id] = current_time
-    print(f"Button {button_id} triggered: {time_since_last:.3f}s since last press")
     return True
 
 
@@ -505,18 +502,12 @@ def keyboard_loop(root=None):
 
 def main():
     if HAS_GPIO:
-        # Define GPIO buttons with debouncing
-        print("Initializing GPIO buttons...")
-        button4 = Button(4, bounce_time=0.05)  # 50ms hardware debounce
-        print("GPIO 4 initialized")
-        button17 = Button(17, bounce_time=0.05)
-        print("GPIO 17 initialized")
-        button27 = Button(27, bounce_time=0.05)
-        print("GPIO 27 initialized")
-        button22 = Button(22, bounce_time=0.05)
-        print("GPIO 22 initialized")
-        button18 = Button(18, bounce_time=0.05)
-        print("GPIO 18 initialized")
+        # Define GPIO buttons with debouncing (50ms is default, increase if needed)
+        button4 = Button(4, bounce_time=1)  # 100ms debounce
+        button17 = Button(17, bounce_time=1)
+        button27 = Button(27, bounce_time=1)
+        button22 = Button(22, bounce_time=1)
+        button18 = Button(18, bounce_time=1)
 
         # Assign callbacks
         button4.when_pressed = button_pressed_4
@@ -524,11 +515,10 @@ def main():
         button27.when_pressed = button_pressed_27
         button22.when_pressed = button_pressed_22
         button18.when_pressed = button_pressed_18
-        print("All GPIO callbacks assigned")
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
-        play_video("Guide_steps.mp4") 
+        play_video("Process_step_1.mp4")  # Start with Process Step 1 as default 
 
         # Create black fullscreen window on Pi
         root = init_video_window()
