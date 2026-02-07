@@ -365,8 +365,7 @@ def can_trigger_button():
 def button_pressed_17():
     print("Button 17 was pressed!")
     if can_trigger_button():
-        #play_video("Process_step_2.mp4")
-        print("video playing procees 2")
+        play_video("Process_step_2.mp4")
     else:
         print("Button 17 ignored (debouncing)...")
 
@@ -374,8 +373,7 @@ def button_pressed_17():
 def button_pressed_27():
     print("Button 27 was pressed!")
     if can_trigger_button():
-        #play_video("Guide_steps.mp4")
-        print("guide step triggrerd")
+        play_video("Guide_steps.mp4")
     else:
         print("Button 27 ignored (debouncing)...")
 
@@ -383,8 +381,7 @@ def button_pressed_27():
 def button_pressed_22():
     print("Button 22 was pressed!")
     if can_trigger_button():
-        #play_video("Warning.mp4")
-        print("warning triggrerd")
+        play_video("Warning.mp4")
     else:
         print("Button 22 ignored (debouncing)...")
 
@@ -392,8 +389,7 @@ def button_pressed_22():
 def button_pressed_4():
     print("Button 4 was pressed!")
     if can_trigger_button():
-        #play_video("Process_step_1.mp4")
-        print("process step 1 triggered")
+        play_video("Process_step_1.mp4")
     else:
         print("Button 4 ignored (debouncing)...")
 
@@ -401,8 +397,7 @@ def button_pressed_4():
 def button_pressed_18():
     print("Button 18 was pressed!")
     if can_trigger_button():
-        #play_video("Process_step_3.mp4")
-        print("process step 3 triggered")
+        play_video("Process_step_3.mp4")
     else:
         print("Button 18 ignored (debouncing)...")
 
@@ -504,7 +499,7 @@ def main():
 
         # Auto-play first video on startup
         print("Auto-playing first video...")
-        #play_video("Process_step_1.mp4")
+        play_video("Process_step_1.mp4")
 
         # Create black fullscreen window on Pi
         root = init_video_window()
