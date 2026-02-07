@@ -215,7 +215,7 @@ else:
     media_player.set_fullscreen(False)  # Windows: embed in Tkinter window
 list_player = vlc_instance.media_list_player_new()
 list_player.set_media_player(media_player)
-list_player.set_playback_mode(vlc.PlaybackMode(0))  # Loop mode
+list_player.set_playback_mode(vlc.PlaybackMode(2))  # No loop - only play selected video, don't auto-advance
 
 # Pre-load all video media objects for instant switching
 def _preload_videos():
@@ -356,7 +356,6 @@ def play_video(path_or_filename: str):
         media_player.set_time(0)
     except Exception as e:
         print(f"Warning: Could not set media time to 0: {e}")
-        pass
     media_player.play()
     print(f"Switched to: {path_or_filename}")
 
