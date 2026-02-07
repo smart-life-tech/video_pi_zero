@@ -504,7 +504,7 @@ def main():
 
         # Auto-play first video on startup
         print("Auto-playing first video...")
-        play_video("Process_step_1.mp4")
+        #play_video("Process_step_1.mp4")
 
         # Create black fullscreen window on Pi
         root = init_video_window()
