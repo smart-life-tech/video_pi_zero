@@ -525,7 +525,14 @@ def main():
         print("All GPIO buttons initialized")
 
         # Track button states for polling (detect transitions)
-        button_states = {4: False, 17: False, 27: False, 22: False, 18: False}
+        # Initialize from current levels to avoid false triggers on boot.
+        button_states = {
+            4: _GPIO_BUTTONS[4].is_pressed,
+            17: _GPIO_BUTTONS[17].is_pressed,
+            27: _GPIO_BUTTONS[27].is_pressed,
+            22: _GPIO_BUTTONS[22].is_pressed,
+            18: _GPIO_BUTTONS[18].is_pressed,
+        }
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
