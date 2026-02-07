@@ -506,11 +506,17 @@ def keyboard_loop(root=None):
 def main():
     if HAS_GPIO:
         # Define GPIO buttons with debouncing
+        print("Initializing GPIO buttons...")
         button4 = Button(4, bounce_time=0.05)  # 50ms hardware debounce
+        print("GPIO 4 initialized")
         button17 = Button(17, bounce_time=0.05)
+        print("GPIO 17 initialized")
         button27 = Button(27, bounce_time=0.05)
+        print("GPIO 27 initialized")
         button22 = Button(22, bounce_time=0.05)
+        print("GPIO 22 initialized")
         button18 = Button(18, bounce_time=0.05)
+        print("GPIO 18 initialized")
 
         # Assign callbacks
         button4.when_pressed = button_pressed_4
@@ -518,6 +524,7 @@ def main():
         button27.when_pressed = button_pressed_27
         button22.when_pressed = button_pressed_22
         button18.when_pressed = button_pressed_18
+        print("All GPIO callbacks assigned")
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
