@@ -347,29 +347,59 @@ def exit_vlc():
     print("Exit vlc")
 
 
+# Track last button press time to prevent rapid re-triggering (debounce)
+last_button_press_time = 0
+button_cooldown_seconds = 1  # Ignore button presses within 0.5 seconds of last press
+
+
+def can_trigger_button():
+    """Check if we should allow a button press (debounce)."""
+    global last_button_press_time
+    current_time = time.time()
+    if current_time - last_button_press_time < button_cooldown_seconds:
+        return False
+    last_button_press_time = current_time
+    return True
+
+
 def button_pressed_17():
     print("Button 17 was pressed!")
-    play_video("Process_step_2.mp4")
+    if can_trigger_button():
+        play_video("Process_step_2.mp4")
+    else:
+        print("Button 17 ignored (debouncing)...")
 
 
 def button_pressed_27():
     print("Button 27 was pressed!")
-    play_video("Guide_steps.mp4")
+    if can_trigger_button():
+        play_video("Guide_steps.mp4")
+    else:
+        print("Button 27 ignored (debouncing)...")
 
 
 def button_pressed_22():
     print("Button 22 was pressed!")
-    play_video("Warning.mp4")
+    if can_trigger_button():
+        play_video("Warning.mp4")
+    else:
+        print("Button 22 ignored (debouncing)...")
 
 
 def button_pressed_4():
     print("Button 4 was pressed!")
-    play_video("Process_step_1.mp4")
+    if can_trigger_button():
+        play_video("Process_step_1.mp4")
+    else:
+        print("Button 4 ignored (debouncing)...")
 
 
 def button_pressed_18():
     print("Button 18 was pressed!")
-    play_video("Process_step_3.mp4")
+    if can_trigger_button():
+        play_video("Process_step_3.mp4")
+    else:
+        print("Button 18 ignored (debouncing)...")
 
 
 def keyboard_loop(root=None):
@@ -453,12 +483,12 @@ def keyboard_loop(root=None):
 
 def main():
     if HAS_GPIO:
-        # Define GPIO buttons
-        button4 = Button(4)
-        button17 = Button(17)
-        button27 = Button(27)
-        button22 = Button(22)
-        button18 = Button(18)
+        # Define GPIO buttons with debouncing (50ms is default, increase if needed)
+        button4 = Button(4, bounce_time=0.1)  # 100ms debounce
+        button17 = Button(17, bounce_time=0.1)
+        button27 = Button(27, bounce_time=0.1)
+        button22 = Button(22, bounce_time=0.1)
+        button18 = Button(18, bounce_time=0.1)
 
         # Assign callbacks
         button4.when_pressed = button_pressed_4
