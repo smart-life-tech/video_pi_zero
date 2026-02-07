@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 logger.info("Video Player started")
 
 # Redirect print to logging (optional - uncomment to use logging instead of print)
-def print(*args, **kwargs):
-    logger.info(' '.join(str(arg) for arg in args))
+# def print(*args, **kwargs):
+#     logger.info(' '.join(str(arg) for arg in args))
 
 #   @reboot sleep 15 && DISPLAY=:0 XAUTHORITY=/home/helmwash/.Xauthority /usr/bin/python3 /home/helmwash/video_pi_zero/vid.py >> /home/helmwash/video_pi_zero/vid.log 2>&1
 # Tkinter for GUI (Windows embedding and Pi fullscreen backdrop)
