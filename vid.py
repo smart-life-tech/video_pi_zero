@@ -366,23 +366,24 @@ def exit_vlc():
 
 
 # Track last button press time to prevent rapid re-triggering (debounce)
-last_button_press_time = 0
-button_cooldown_seconds = 1  # Ignore button presses within 0.5 seconds of last press
+last_button_press_times = {}  # Track each button separately
+button_cooldown_seconds = 1  # Ignore button presses within 1 second of last press for same button
 
 
-def can_trigger_button():
-    """Check if we should allow a button press (debounce)."""
-    global last_button_press_time
+def can_trigger_button(button_id):
+    """Check if we should allow a button press (debounce per button)."""
+    global last_button_press_times
     current_time = time.time()
-    if current_time - last_button_press_time < button_cooldown_seconds:
+    last_press = last_button_press_times.get(button_id, 0)
+    if current_time - last_press < button_cooldown_seconds:
         return False
-    last_button_press_time = current_time
+    last_button_press_times[button_id] = current_time
     return True
 
 
 def button_pressed_17():
     print("Button 17 was pressed!")
-    if can_trigger_button():
+    if can_trigger_button(17):
         play_video("Process_step_2.mp4")
     else:
         print("Button 17 ignored (debouncing)...")
@@ -390,7 +391,7 @@ def button_pressed_17():
 
 def button_pressed_27():
     print("Button 27 was pressed!")
-    if can_trigger_button():
+    if can_trigger_button(27):
         play_video("Guide_steps.mp4")
     else:
         print("Button 27 ignored (debouncing)...")
@@ -398,7 +399,7 @@ def button_pressed_27():
 
 def button_pressed_22():
     print("Button 22 was pressed!")
-    if can_trigger_button():
+    if can_trigger_button(22):
         play_video("Warning.mp4")
     else:
         print("Button 22 ignored (debouncing)...")
@@ -406,7 +407,7 @@ def button_pressed_22():
 
 def button_pressed_4():
     print("Button 4 was pressed!")
-    if can_trigger_button():
+    if can_trigger_button(4):
         play_video("Process_step_1.mp4")
     else:
         print("Button 4 ignored (debouncing)...")
@@ -414,7 +415,7 @@ def button_pressed_4():
 
 def button_pressed_18():
     print("Button 18 was pressed!")
-    if can_trigger_button():
+    if can_trigger_button(18):
         play_video("Process_step_3.mp4")
     else:
         print("Button 18 ignored (debouncing)...")
