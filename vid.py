@@ -524,15 +524,16 @@ def main():
 
         print("All GPIO buttons initialized")
 
-        # Track button arming state for polling (level-triggered, once per press)
-        # If a line is HIGH at boot, it must go LOW once before it can trigger.
-        button_armed = {
-            4: not _GPIO_BUTTONS[4].is_pressed,
-            17: not _GPIO_BUTTONS[17].is_pressed,
-            27: not _GPIO_BUTTONS[27].is_pressed,
-            22: not _GPIO_BUTTONS[22].is_pressed,
-            18: not _GPIO_BUTTONS[18].is_pressed,
+        # Track default (boot) state and last state for polling.
+        # Trigger on any state change from the previous loop.
+        boot_state = {
+            4: _GPIO_BUTTONS[4].is_pressed,
+            17: _GPIO_BUTTONS[17].is_pressed,
+            27: _GPIO_BUTTONS[27].is_pressed,
+            22: _GPIO_BUTTONS[22].is_pressed,
+            18: _GPIO_BUTTONS[18].is_pressed,
         }
+        last_state = dict(boot_state)
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
@@ -551,33 +552,31 @@ def main():
             print("Waiting for GPIO button presses...")
             try:
                 while True:
-                    # Poll each button and trigger once per HIGH press
+                    # Poll each button and trigger on any state change
                     for gpio_pin in [4, 17, 27, 22, 18]:
                         current_state = _GPIO_BUTTONS[gpio_pin].is_pressed
-                        if current_state:
-                            if button_armed[gpio_pin]:
-                                print(f"GPIO {gpio_pin} pressed!")
-                                # Call handler based on GPIO pin
-                                if gpio_pin == 4:
-                                    button_pressed_4()
-                                    time.sleep(0.3)  # Short delay to allow media player to start
-                                elif gpio_pin == 17:
-                                    button_pressed_17()
-                                    time.sleep(0.3)
-                                elif gpio_pin == 18:
-                                    button_pressed_18()
-                                    time.sleep(0.3)
-                                elif gpio_pin == 22:
-                                    button_pressed_22()
-                                    time.sleep(0.3)
-                                elif gpio_pin == 27:
-                                    button_pressed_27()
-                                    time.sleep(0.3)
-                                # Disarm until the line goes LOW again
-                                button_armed[gpio_pin] = False
-                        else:
-                            # Re-arm when released (LOW)
-                            button_armed[gpio_pin] = True
+                        if current_state != last_state[gpio_pin]:
+                            print(
+                                f"GPIO {gpio_pin} state change: {last_state[gpio_pin]} -> {current_state} "
+                                f"(boot={boot_state[gpio_pin]})"
+                            )
+                            # Call handler based on GPIO pin
+                            if gpio_pin == 4:
+                                button_pressed_4()
+                                time.sleep(0.3)  # Short delay to allow media player to start
+                            elif gpio_pin == 17:
+                                button_pressed_17()
+                                time.sleep(0.3)
+                            elif gpio_pin == 18:
+                                button_pressed_18()
+                                time.sleep(0.3)
+                            elif gpio_pin == 22:
+                                button_pressed_22()
+                                time.sleep(0.3)
+                            elif gpio_pin == 27:
+                                button_pressed_27()
+                                time.sleep(0.3)
+                            last_state[gpio_pin] = current_state
                     
                     time.sleep(0.05)  # Poll every 50ms
             except KeyboardInterrupt:
