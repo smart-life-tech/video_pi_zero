@@ -367,7 +367,7 @@ def exit_vlc():
 
 # Track last button press time to prevent rapid re-triggering (debounce)
 last_any_button_press_time = 0  # Last time ANY button was pressed (global debounce)
-button_cooldown_seconds = 5.0  # Ignore all buttons for 5 seconds after ANY button press
+button_cooldown_seconds = 1.0  # Ignore all buttons for 5 seconds after ANY button press
 
 
 def can_trigger_button(button_id):
