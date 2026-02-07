@@ -354,7 +354,8 @@ def play_video(path_or_filename: str):
     list_player.play_item_at_index(idx)
     try:
         media_player.set_time(0)
-    except Exception:
+    except Exception as e:
+        print(f"Warning: Could not set media time to 0: {e}")
         pass
     media_player.play()
     print(f"Switched to: {path_or_filename}")
