@@ -388,7 +388,7 @@ def can_trigger_button(button_id):
 def button_pressed_17():
     print("Button 17 was pressed!")
     if can_trigger_button(17):
-        play_video("Process_step_2.mp4")
+        play_video("Process_step_1.mp4")
 
 
 def button_pressed_27():
@@ -406,7 +406,7 @@ def button_pressed_22():
 def button_pressed_4():
     print("Button 4 was pressed!")
     if can_trigger_button(4):
-        play_video("Process_step_1.mp4")
+        play_video("Process_step_2.mp4")
 
 
 def button_pressed_18():
