@@ -546,6 +546,8 @@ def main():
             18: _GPIO_BUTTONS[18].is_pressed,
         }
         last_state = dict(boot_state)
+        last_change_time = {4: 0, 17: 0, 27: 0, 22: 0, 18: 0}  # Debounce per-pin: ignore changes for 200ms
+        debounce_ms = 0.2  # 200ms debounce per pin
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
@@ -567,7 +569,9 @@ def main():
                     # Poll each button and trigger on any state change
                     for gpio_pin in [4, 17, 27, 22, 18]:
                         current_state = _GPIO_BUTTONS[gpio_pin].is_pressed
-                        if current_state != last_state[gpio_pin]:
+                        current_time = time.time()
+                        # Check if state changed AND debounce window has passed
+                        if current_state != last_state[gpio_pin] and (current_time - last_change_time[gpio_pin]) > debounce_ms:
                             print(
                                 f"GPIO {gpio_pin} state change: {last_state[gpio_pin]} -> {current_state} "
                                 f"(boot={boot_state[gpio_pin]})"
@@ -589,6 +593,7 @@ def main():
                                 button_pressed_27()
                                 time.sleep(0.3)
                             last_state[gpio_pin] = current_state
+                            last_change_time[gpio_pin] = current_time  # Update debounce timer
                     
                     time.sleep(0.05)  # Poll every 50ms
             except KeyboardInterrupt:
