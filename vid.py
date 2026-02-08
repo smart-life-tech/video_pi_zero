@@ -369,77 +369,50 @@ def exit_vlc():
     print("Exit vlc")
 
 
-# Track process1 playback to apply 10-second input lockout after it starts
-process1_start_time = None  # Timestamp when Process_step_1 started
-process1_ignore_seconds = 10  # Ignore inputs for 10 seconds after Process_step_1 starts
-
-
-def is_process1_cooldown_active():
-    """Check if we're in the 10-second ignore window after Process_step_1 starts."""
-    global process1_start_time
-    if process1_start_time is None:
-        return False
-    elapsed = time.time() - process1_start_time
-    if elapsed < process1_ignore_seconds:
-        print(f"Process_step_1 ignore window: {elapsed:.1f}s/{process1_ignore_seconds}s")
-        return True
-    # Cooldown expired, reset
-    process1_start_time = None
-    return False
+# Track last button press time to prevent rapid re-triggering (debounce)
+last_any_button_press_time = 0  # Last time ANY button was pressed (global debounce)
+button_cooldown_seconds = 5  # Ignore all buttons for 0.2 seconds after ANY button press
 
 
 def can_trigger_button(button_id):
-    """Check if button press is allowed (blocks input during Process_step_1 10s window)."""
-    if is_process1_cooldown_active():
-        print(f"Button {button_id} blocked: Process_step_1 cooldown active")
+    """Check if we should allow a button press (global debounce)."""
+    global last_any_button_press_time
+    current_time = time.time()
+    time_since_last = current_time - last_any_button_press_time
+    if time_since_last < button_cooldown_seconds:
         return False
+    last_any_button_press_time = current_time
     return True
 
 
 def button_pressed_17():
     print("Button 17 was pressed!")
     if can_trigger_button(17):
-        global process1_start_time
-        process1_start_time = time.time()  # Start 10s cooldown
-        play_video("Process_step_1.mp4")
-    else:
-        print("Button 17 ignored (Process_step_1 cooldown)...")  
+        play_video("Process_step_2.mp4")
 
 
 def button_pressed_27():
     print("Button 27 was pressed!")
     if can_trigger_button(27):
-        global process1_start_time
-        process1_start_time = time.time()  # Start 10s cooldown
-        play_video("Process_step_1.mp4")
-    else:
-        print("Button 27 ignored (Process_step_1 cooldown)...")
+        play_video("Guide_steps.mp4")
 
 
 def button_pressed_22():
-    print("Button 22 was pressed - WARNING!")
-    # Warning is exempt from Process_step_1 cooldown
-    play_video("Warning.mp4")
+    print("Button 22 was pressed!")
+    if can_trigger_button(22):
+        play_video("Warning.mp4")
 
 
 def button_pressed_4():
     print("Button 4 was pressed!")
     if can_trigger_button(4):
-        global process1_start_time
-        process1_start_time = time.time()  # Start 10s cooldown
         play_video("Process_step_1.mp4")
-    else:
-        print("Button 4 ignored (Process_step_1 cooldown)...")
 
 
 def button_pressed_18():
     print("Button 18 was pressed!")
     if can_trigger_button(18):
-        global process1_start_time
-        process1_start_time = time.time()  # Start 10s cooldown
-        play_video("Process_step_1.mp4")
-    else:
-        print("Button 18 ignored (Process_step_1 cooldown)...")
+        play_video("Process_step_3.mp4")
     if not sys.platform.startswith("win"):
         print("Keyboard mode not available on this platform.")
         return
@@ -550,8 +523,6 @@ def main():
             18: _GPIO_BUTTONS[18].is_pressed,
         }
         last_state = dict(boot_state)
-        last_change_time = {4: 0, 17: 0, 27: 0, 22: 0, 18: 0}  # Debounce per-pin: ignore changes for 200ms
-        debounce_ms = 0.2  # 200ms debounce per pin
 
         # Auto-play first video on startup
         print("Auto-playing first video on pi...")
@@ -573,31 +544,20 @@ def main():
                     # Poll each button and trigger on any state change
                     for gpio_pin in [4, 17, 27, 22, 18]:
                         current_state = _GPIO_BUTTONS[gpio_pin].is_pressed
-                        current_time = time.time()
-                        # Check if state changed AND debounce window has passed
-                        if current_state != last_state[gpio_pin] and (current_time - last_change_time[gpio_pin]) > debounce_ms:
-                            print(
-                                f"GPIO {gpio_pin} state change: {last_state[gpio_pin]} -> {current_state} "
-                                f"(boot={boot_state[gpio_pin]})"
-                            )
+                        if current_state != last_state[gpio_pin]:
+                            print(f"GPIO {gpio_pin} state change: {last_state[gpio_pin]} -> {current_state}")
                             # Call handler based on GPIO pin
                             if gpio_pin == 4:
                                 button_pressed_4()
-                                time.sleep(0.3)  # Short delay to allow media player to start
                             elif gpio_pin == 17:
                                 button_pressed_17()
-                                time.sleep(0.3)
                             elif gpio_pin == 18:
                                 button_pressed_18()
-                                time.sleep(0.3)
                             elif gpio_pin == 22:
                                 button_pressed_22()
-                                time.sleep(0.3)
                             elif gpio_pin == 27:
                                 button_pressed_27()
-                                time.sleep(0.3)
                             last_state[gpio_pin] = current_state
-                            last_change_time[gpio_pin] = current_time  # Update debounce timer
                     
                     time.sleep(0.05)  # Poll every 50ms
             except KeyboardInterrupt:
