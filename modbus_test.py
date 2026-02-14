@@ -26,14 +26,17 @@ def main():
         sys.exit(2)
 
     try:
-        result = client.read_coils(address=START_COIL, count=COIL_COUNT, slave=MODBUS_UNIT_ID)
-        if result.isError():
-            print(f"ERROR: Modbus read failed: {result}")
-            sys.exit(3)
-
-        states = result.bits[:COIL_COUNT]
-        print(f"Read coils {START_COIL}-{START_COIL + COIL_COUNT - 1}: {states}")
-
+        while True:
+            try:
+                result = client.read_coils(address=START_COIL, count=COIL_COUNT, slave=MODBUS_UNIT_ID)
+                if result.isError():
+                    print(f"ERROR: Modbus read failed: {result}")
+                else:
+                    states = result.bits[:COIL_COUNT]
+                    print(f"Read coils {START_COIL}-{START_COIL + COIL_COUNT - 1}: {states}")
+            except Exception as e:
+                print(f"Exception during Modbus read: {e}")
+            time.sleep(1)  # Wait before next read
     finally:
         client.close()
         time.sleep(0.1)
