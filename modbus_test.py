@@ -1,6 +1,9 @@
 import sys
 import time
 
+import socket
+import psutil
+
 try:
     from pymodbus.client import ModbusTcpClient
 except ImportError:
@@ -18,11 +21,12 @@ COIL_COUNT = 5
 
 
 def main():
+
+    print_available_network_ips()
     print(f"Connecting to Modbus server {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT} (unit {MODBUS_UNIT_ID})")
     client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT)
-
     if not client.connect():
-        print("ERROR: Could not connect to Modbus server.")
+        print("ERROR: Could not connect to Modbus server. Check if PLC is on the same network and cable is connected.")
         sys.exit(2)
 
     try:
@@ -44,3 +48,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Utility function to print all available network IPs
+def print_available_network_ips():
+    print("Available network interfaces and IP addresses:")
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    print(f"  Interface: {iface}  IP: {addr.address}")
+    except Exception as e:
+        print(f"Could not list network interfaces: {e}")
