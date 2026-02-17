@@ -12,7 +12,7 @@ except ImportError:
     sys.exit(1)
 
 # Configuration
-MODBUS_SERVER_IP = "127.0.0.1"  # localhost for virtual server, or "192.168.1.100" for real PLC
+MODBUS_SERVER_IP = "192.168.1.100"  # PLC IP address (use "127.0.0.1" for virtual server)
 MODBUS_SERVER_PORT = 502
 MODBUS_UNIT_ID = 1
 

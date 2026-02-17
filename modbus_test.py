@@ -21,7 +21,7 @@ def print_available_network_ips():
         print(f"Could not list network interfaces: {e}")
 
 # Basic connection settings
-MODBUS_SERVER_IP = "127.0.0.1"  # Use localhost for virtual server, or "192.168.1.100" for real PLC
+MODBUS_SERVER_IP = "192.168.1.100"  # PLC IP address (use "127.0.0.1" for virtual server)
 MODBUS_SERVER_PORT = 502
 MODBUS_UNIT_ID = 1
 
