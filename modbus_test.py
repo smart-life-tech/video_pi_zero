@@ -35,14 +35,31 @@ def main():
     print_available_network_ips()
     print(f"Connecting to Modbus server {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT} (unit {MODBUS_UNIT_ID})")
     client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT)
-    if not client.connect():
-        print("ERROR: Could not connect to Modbus server. Check if PLC is on the same network and cable is connected.")
+    
+    connected = client.connect()
+    if not connected:
+        print("=" * 60)
+        print("ERROR: Could not connect to Modbus server.")
+        print("=" * 60)
+        print("Check:")
+        print("  - PLC is powered on")
+        print("  - Ethernet cable is connected")
+        print("  - PLC IP is 192.168.1.100")
+        print("  - Pi IP is 192.168.1.10 (shown above)")
+        print("=" * 60)
         sys.exit(2)
+    
+    print("=" * 60)
+    print("✓ CONNECTION SUCCESSFUL!")
+    print("=" * 60)
+    print(f"Connected to PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
+    print("Reading coils...")
+    print("=" * 60)
 
     try:
         while True:
             try:
-                result = client.read_coils(START_COIL, COIL_COUNT)
+                result = client.read_coils(START_COIL, count=COIL_COUNT)
                 if result.isError():
                     print(f"ERROR: Modbus read failed: {result}")
                 else:
@@ -51,8 +68,11 @@ def main():
             except Exception as e:
                 print(f"Exception during Modbus read: {e}")
             time.sleep(1)  # Wait before next read
+    except KeyboardInterrupt:
+        print("\n\nStopping...")
     finally:
         client.close()
+        print("Connection closed")
         time.sleep(0.1)
 
 

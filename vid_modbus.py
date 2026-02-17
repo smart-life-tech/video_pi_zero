@@ -115,7 +115,7 @@ def read_modbus_coils():
     
     try:
         # Read 5 coils starting from address 0
-        result = modbus_client.read_coils(0, 5)
+        result = modbus_client.read_coils(0, count=5)
         
         if result.isError():
             logger.error(f"Error reading coils: {result}")

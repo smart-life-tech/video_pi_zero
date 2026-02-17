@@ -28,7 +28,7 @@ COIL_NAMES = {
 
 def read_coils(client, start=0, count=5):
     """Read coil states"""
-    result = client.read_coils(start, count)
+    result = client.read_coils(start, count=count)
     if result.isError():
         print(f"ERROR reading coils: {result}")
         return None
