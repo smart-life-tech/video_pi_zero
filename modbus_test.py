@@ -42,7 +42,7 @@ def main():
     try:
         while True:
             try:
-                result = client.read_coils(address=START_COIL, count=COIL_COUNT, unit=MODBUS_UNIT_ID)
+                result = client.read_coils(START_COIL, COIL_COUNT)
                 if result.isError():
                     print(f"ERROR: Modbus read failed: {result}")
                 else:

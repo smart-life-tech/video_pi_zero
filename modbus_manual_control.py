@@ -28,7 +28,7 @@ COIL_NAMES = {
 
 def read_coils(client, start=0, count=5):
     """Read coil states"""
-    result = client.read_coils(address=start, count=count, unit=MODBUS_UNIT_ID)
+    result = client.read_coils(start, count)
     if result.isError():
         print(f"ERROR reading coils: {result}")
         return None
@@ -37,7 +37,7 @@ def read_coils(client, start=0, count=5):
 
 def write_coil(client, coil_address, value):
     """Write a single coil"""
-    result = client.write_coil(address=coil_address, value=value, unit=MODBUS_UNIT_ID)
+    result = client.write_coil(coil_address, value)
     if result.isError():
         print(f"ERROR writing coil {coil_address}: {result}")
         return False
@@ -46,7 +46,7 @@ def write_coil(client, coil_address, value):
 
 def write_multiple_coils(client, start_address, values):
     """Write multiple coils at once"""
-    result = client.write_coils(address=start_address, values=values, unit=MODBUS_UNIT_ID)
+    result = client.write_coils(start_address, values)
     if result.isError():
         print(f"ERROR writing coils: {result}")
         return False
