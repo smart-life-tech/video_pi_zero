@@ -11,7 +11,7 @@ import logging
 # Setup logging to file and console
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_modbus.log")
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,  # Changed from DEBUG to reduce console spam
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file),
@@ -19,6 +19,10 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Silence pymodbus debug logging in console (still logs to file)
+logging.getLogger('pymodbus').setLevel(logging.WARNING)
+
 logger.info("Modbus Video Player started")
 
 # Import Modbus TCP Client
