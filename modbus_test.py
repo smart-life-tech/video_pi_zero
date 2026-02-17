@@ -22,7 +22,7 @@ def print_available_network_ips():
 
 # Basic connection settings
 MODBUS_SERVER_IP = "192.168.1.100"  # PLC IP address (use "127.0.0.1" for virtual server)
-MODBUS_SERVER_PORT = 5040  # Use 5020 for non-admin users, 502 for real PLC
+MODBUS_SERVER_PORT = 504
 MODBUS_UNIT_ID = 1
 
 # What to read (coils 0-4 by default)
