@@ -9,9 +9,19 @@ try:
 except ImportError:
     print("ERROR: pymodbus not installed. Install with: pip install pymodbus")
     sys.exit(1)
+# Utility function to print all available network IPs
+def print_available_network_ips():
+    print("Available network interfaces and IP addresses:")
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    print(f"  Interface: {iface}  IP: {addr.address}")
+    except Exception as e:
+        print(f"Could not list network interfaces: {e}")
 
 # Basic connection settings
-MODBUS_SERVER_IP = "192.168.1.100"
+MODBUS_SERVER_IP = "127.0.0.1"  # Use localhost for virtual server, or "192.168.1.100" for real PLC
 MODBUS_SERVER_PORT = 502
 MODBUS_UNIT_ID = 1
 
@@ -49,13 +59,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Utility function to print all available network IPs
-def print_available_network_ips():
-    print("Available network interfaces and IP addresses:")
-    try:
-        for iface, addrs in psutil.net_if_addrs().items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    print(f"  Interface: {iface}  IP: {addr.address}")
-    except Exception as e:
-        print(f"Could not list network interfaces: {e}")
