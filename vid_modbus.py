@@ -54,7 +54,7 @@ else:
 # MODBUS CONFIGURATION
 # =============================================================================
 MODBUS_SERVER_IP = "192.168.1.100"  # Change to your Siemens LOGO! 8 IP address
-MODBUS_SERVER_PORT = 502  # Standard Modbus TCP port
+MODBUS_SERVER_PORT = 504  # Standard Modbus TCP port
 MODBUS_UNIT_ID = 1  # Modbus slave/unit ID (typically 1 for LOGO!)
 
 # Modbus coil addresses for video triggers (0-based addressing)
