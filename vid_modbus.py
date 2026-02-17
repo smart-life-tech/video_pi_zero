@@ -144,13 +144,17 @@ def handle_modbus_trigger(action_name):
     if can_trigger_action(action_name):
         video_file = VIDEO_FILES[action_name]
         logger.info(f"Modbus trigger: {action_name} -> {video_file}")
-        print(f"Playing {video_file} triggered by {action_name}")
+        print(f"  -> Playing video: {video_file}")
         play_video(video_file)
+    else:
+        logger.debug(f"Trigger for {action_name} ignored (cooldown active)")
+        print(f"  -> Trigger ignored (cooldown: {COOLDOWN_SECONDS}s)")
 
 
 def modbus_polling_loop():
     """Main loop that polls Modbus coils and triggers videos"""
     logger.info("Starting Modbus polling loop")
+    print("[Modbus Monitor] Polling started - waiting for coil changes...\n")
     
     # Track last state of each coil to detect rising edge (0 -> 1 transition)
     last_coil_states = [False] * 5
@@ -182,7 +186,12 @@ def modbus_polling_loop():
                 # Trigger on rising edge (0 -> 1)
                 if current_state and not previous_state:
                     logger.info(f"Rising edge detected on coil {coil_addr} ({action_name})")
+                    print(f"[Coil {coil_addr}] State changed: OFF -> ON ({action_name})")
                     handle_modbus_trigger(action_name)
+                # Also log falling edge for visibility
+                elif not current_state and previous_state:
+                    logger.info(f"Falling edge detected on coil {coil_addr} ({action_name})")
+                    print(f"[Coil {coil_addr}] State changed: ON -> OFF ({action_name})")
                 
                 # Update last state
                 last_coil_states[idx] = current_state
@@ -218,15 +227,32 @@ def main():
         return
     
     # Connect to Modbus server
+    print("=" * 60)
+    print(f"Connecting to Modbus PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}...")
+    print("=" * 60)
+    
     if not connect_modbus():
         logger.error("Failed to establish initial Modbus connection")
-        print(f"\nERROR: Could not connect to Modbus server at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-        print("Please check:")
-        print("1. PLC is powered on")
-        print("2. Network connection is working")
-        print("3. IP address is correct in the script")
-        print("4. Modbus TCP is enabled on the LOGO! 8")
+        print("\n" + "=" * 60)
+        print("ERROR: MODBUS CONNECTION FAILED")
+        print("=" * 60)
+        print(f"Could not connect to {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
+        print("\nPlease check:")
+        print("  1. PLC is powered on")
+        print("  2. Ethernet cable is connected")
+        print("  3. Pi has IP 192.168.1.10 (run: ifconfig eth0)")
+        print("  4. PLC IP is correct: 192.168.1.100")
+        print("  5. Modbus TCP is enabled on the LOGO! 8")
+        print("=" * 60)
         return
+    
+    # Connection successful
+    print("\n" + "=" * 60)
+    print("✓ MODBUS CONNECTION SUCCESSFUL!")
+    print("=" * 60)
+    print(f"Connected to PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
+    print("Monitoring coils 0-4 for state changes...")
+    print("=" * 60 + "\n")
     
     # Auto-play first video on startup
     logger.info("Auto-playing first video...")
@@ -243,9 +269,6 @@ def main():
     # Run GUI main loop (if available)
     if root is not None:
         logger.info("Starting GUI main loop")
-        print("\nModbus Video Player running...")
-        print(f"Monitoring Modbus coils at {MODBUS_SERVER_IP}")
-        print("Waiting for PLC triggers...\n")
         try:
             root.mainloop()
         except KeyboardInterrupt:
@@ -253,9 +276,7 @@ def main():
     else:
         # No GUI - just wait for Modbus triggers
         logger.info("Running without GUI (console mode)")
-        print("\nModbus Video Player running in console mode...")
-        print(f"Monitoring Modbus coils at {MODBUS_SERVER_IP}")
-        print("Press Ctrl+C to exit\n")
+        print("Press Ctrl+C to exit")
         try:
             modbus_thread.join()
         except KeyboardInterrupt:
