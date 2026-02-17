@@ -42,7 +42,6 @@ if spec and spec.loader:
     vid_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(vid_module)
     _setup_vlc_windows = vid_module._setup_vlc_windows
-    locate_videos_folder = vid_module.locate_videos_folder
     play_video = vid_module.play_video
     init_video_window = vid_module.init_video_window
 else:
