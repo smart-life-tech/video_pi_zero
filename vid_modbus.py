@@ -72,12 +72,33 @@ if sys.platform.startswith("linux"):
             root = tk.Tk()
             root.title("Video Background")
             root.configure(bg="black")
-            root.overrideredirect(True)
-            root.attributes("-fullscreen", True)
-            root.attributes("-topmost", True)
-            root.bind("<Escape>", lambda _e: root.destroy())
-            root.focus_force()
+            root.minsize(1, 1)
+
+            # Force actual full-screen geometry (more reliable than fullscreen attr alone on Pi).
             root.update_idletasks()
+            width = root.winfo_screenwidth()
+            height = root.winfo_screenheight()
+            root.geometry(f"{width}x{height}+0+0")
+
+            root.overrideredirect(True)
+            try:
+                root.attributes("-fullscreen", True)
+            except Exception:
+                pass
+
+            # Keep black background below VLC window so it doesn't overlay videos.
+            try:
+                root.attributes("-topmost", False)
+            except Exception:
+                pass
+
+            # Fill full area with explicit black frame.
+            bg = tk.Frame(root, bg="black")
+            bg.place(x=0, y=0, relwidth=1, relheight=1)
+
+            root.lift()
+            root.lower()
+            root.bind("<Escape>", lambda _e: root.destroy())
             root.update()
             return root
         except Exception as exc:
