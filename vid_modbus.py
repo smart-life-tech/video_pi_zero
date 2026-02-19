@@ -767,7 +767,7 @@ def modbus_polling_loop():
 # =============================================================================
 
 def main():
-    global vlc_supervisor_running
+    global vlc_supervisor_running, idle_mode_requested
     logger.info("=== Modbus Video Player Startup ===")
     logger.info(f"Modbus Server: {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
     logger.info(f"Configured coils: {MODBUS_COILS}")
@@ -824,10 +824,11 @@ def main():
         supervisor_thread = threading.Thread(target=vlc_supervisor_loop, daemon=True)
         supervisor_thread.start()
 
-    # Start in black idle screen until PLC requests Guide_steps or a trigger video
-    logger.info("Starting in black idle screen")
+    # Start with guide video in idle mode on launch
+    logger.info("Starting with guide idle video")
     with video_process_lock:
-        _ensure_black_screen_loop_locked()
+        idle_mode_requested = True
+        _play_idle_guide_locked()
     
     # Start Modbus polling in background thread
     modbus_thread = threading.Thread(target=modbus_polling_loop, daemon=True)
