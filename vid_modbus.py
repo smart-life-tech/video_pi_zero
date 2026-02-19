@@ -10,6 +10,11 @@ import logging
 import subprocess
 import queue
 
+# Improve VLC stability on Raspberry Pi/Wayland by preferring X11-compatible backend.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ.setdefault("XDG_SESSION_TYPE", "x11")
+
 # Setup logging to file and console
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_modbus.log")
 logging.basicConfig(
@@ -50,6 +55,10 @@ if spec and spec.loader:
     _setup_vlc_windows = vid_module._setup_vlc_windows
     play_video = vid_module.play_video
     init_video_window = vid_module.init_video_window
+    resolve_video_path = vid_module.resolve_video_path
+    vlc_instance = vid_module.vlc_instance
+    media_player = vid_module.media_player
+    vlc_lib = vid_module.vlc
 else:
     # Fallback - you may need to copy these functions here
     logger.error("Could not import from vid.py - copy necessary functions manually")
@@ -113,13 +122,27 @@ def video_playback_worker():
     """Single worker that executes play_video to avoid concurrent VLC switches."""
     logger.info("Video playback worker started")
     while True:
+        video_file = None
         try:
             video_file = video_queue.get()
             play_video(video_file)
+
+            # Verify playback is alive; recover if VLC dropped window/output.
+            time.sleep(0.25)
+            state = media_player.get_state()
+            if state in (vlc_lib.State.Error, vlc_lib.State.Ended, vlc_lib.State.Stopped):
+                logger.warning(f"Playback state after switch is {state}; forcing recovery for {video_file}")
+                media_path = resolve_video_path(video_file)
+                media = vlc_instance.media_new(media_path)
+                media_player.set_media(media)
+                if sys.platform.startswith("linux"):
+                    media_player.set_fullscreen(True)
+                media_player.play()
         except Exception as e:
             logger.error(f"Video playback worker error: {e}")
         finally:
-            video_queue.task_done()
+            if video_file is not None:
+                video_queue.task_done()
 
 # =============================================================================
 # MODBUS FUNCTIONS

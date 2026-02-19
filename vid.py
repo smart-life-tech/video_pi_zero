@@ -224,8 +224,9 @@ video_switch_lock = threading.Lock()
 
 # Pre-load all video media objects for instant switching
 def _preload_videos():
-    """Load all video paths once at startup and add to list_player for seamless switching."""
+    """Load all video paths once at startup for fast and stable direct switching."""
     video_map = {}
+    media_map = {}
     media_list = vlc_instance.media_list_new()
     video_files = [
         "Process_step_1.mp4",
@@ -241,12 +242,13 @@ def _preload_videos():
             media = vlc_instance.media_new(path)
             media_list.add_media(media)
             video_map[filename] = idx
+            media_map[filename] = media
             print(f"Preloaded [{idx}]: {filename} -> {path}")
         except Exception as e:
             print(f"Failed to preload {filename}: {e}")
     
     list_player.set_media_list(media_list)
-    return video_map
+    return video_map, media_map
 
 # Resolve paths first, then preload
 def resolve_video_path(filename: str) -> str:
@@ -300,7 +302,7 @@ def check_startup_videos():
 _missing = check_startup_videos()
 if _missing:
     print("Startup check: missing/unreadable videos: " + ", ".join(_missing))
-video_indices = _preload_videos()
+video_indices, video_media = _preload_videos()
 
 
 def init_video_window():
@@ -349,32 +351,30 @@ def init_video_window():
 
 def play_video(path_or_filename: str):
     """Jump to a preloaded video by filename. Seamless, no glitch."""
-    if path_or_filename not in video_indices:
+    if path_or_filename not in video_media:
         print(f"Error: {path_or_filename} not found in preloaded videos")
         return
-    idx = video_indices[path_or_filename]
     with video_switch_lock:
-        # Single switch command is safer on Linux/Wayland than pause+play chaining.
-        list_player.play_item_at_index(idx)
-
-        # Only seek to 0 if player is already in a stable playback state.
+        # Direct media replacement is more stable on Raspberry Pi than list_player index jumps.
         try:
+            media_player.set_media(video_media[path_or_filename])
+            if not sys.platform.startswith("win"):
+                media_player.set_fullscreen(True)
+            media_player.play()
+            time.sleep(0.12)
             state = media_player.get_state()
-            stable_states = {
-                vlc.State.Playing,
-                vlc.State.Paused,
-                vlc.State.Stopped,
-            }
-            if state in stable_states:
-                media_player.set_time(0)
+            if state in (vlc.State.Error, vlc.State.Ended, vlc.State.Stopped):
+                media_player.stop()
+                media_player.set_media(video_media[path_or_filename])
+                media_player.play()
         except Exception as e:
-            print(f"Warning: Could not reset media time: {e}")
+            print(f"Warning: Video switch failed for {path_or_filename}: {e}")
 
     print(f"Switched to: {path_or_filename}")
 
 
 def exit_vlc():
-    list_player.stop()
+    media_player.stop()
     print("Exit vlc")
 
 
