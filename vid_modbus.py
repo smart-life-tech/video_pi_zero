@@ -127,12 +127,13 @@ video_queue = queue.Queue(maxsize=20)
 video_process_lock = threading.Lock()
 current_vlc_process = None
 USE_EXTERNAL_VLC = sys.platform.startswith("linux")
-USE_VLC_RC_CONTROL = True
+USE_VLC_RC_CONTROL = False
 VLC_RC_HOST = "127.0.0.1"
 VLC_RC_PORT = 4213
 vlc_supervisor_running = False
 trigger_video_active = False
 last_requested_video = None
+idle_guide_active = False
 
 
 def _send_vlc_command_locked(command):
@@ -292,10 +293,19 @@ def _stop_external_vlc_locked():
 
 def _play_idle_guide_locked():
     """Play Guide_steps in loop for idle mode. Caller must hold video_process_lock."""
-    global trigger_video_active, current_vlc_process
+    global trigger_video_active, current_vlc_process, idle_guide_active
     guide_path = resolve_video_path("Guide_steps.mp4")
     if not os.path.exists(guide_path):
         logger.error(f"Guide video not found: {guide_path}")
+        return
+
+    # Avoid restarting VLC if idle guide is already active.
+    if (
+        (not USE_VLC_RC_CONTROL)
+        and idle_guide_active
+        and current_vlc_process is not None
+        and current_vlc_process.poll() is None
+    ):
         return
 
     if USE_VLC_RC_CONTROL:
@@ -335,12 +345,13 @@ def _play_idle_guide_locked():
         ]
         current_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     trigger_video_active = False
+    idle_guide_active = True
     logger.info("Idle guide loop active")
 
 
 def _play_trigger_once_locked(video_file):
     """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, current_vlc_process, last_requested_video
+    global trigger_video_active, current_vlc_process, last_requested_video, idle_guide_active
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -384,6 +395,7 @@ def _play_trigger_once_locked(video_file):
         ]
         current_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     trigger_video_active = True
+    idle_guide_active = False
     last_requested_video = video_file
     logger.info(f"Switched to trigger video: {video_file}")
     print(f"Switched to: {video_file}")
@@ -435,7 +447,7 @@ def vlc_supervisor_loop():
         except Exception as e:
             logger.warning(f"VLC supervisor warning: {e}")
 
-        time.sleep(0.35)
+        time.sleep(0.1)
 
 
 def play_video_safe(video_file):
