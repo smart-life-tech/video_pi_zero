@@ -7,6 +7,7 @@ import sys
 import time
 import threading
 import logging
+import subprocess
 
 # Setup logging to file and console
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_modbus.log")
@@ -59,6 +60,9 @@ else:
 MODBUS_SERVER_IP = "192.168.1.100"  # Change to your Siemens LOGO! 8 IP address
 MODBUS_SERVER_PORT = 504  # Standard Modbus TCP port
 MODBUS_UNIT_ID = 1  # Modbus slave/unit ID (typically 1 for LOGO!)
+PI_ETH_INTERFACE = "eth0"
+PI_IP = "192.168.1.10"
+PI_IP_CIDR = f"{PI_IP}/24"
 
 # Modbus coil addresses for video triggers (0-based addressing)
 # These map to your 5 GPIO buttons
@@ -108,6 +112,73 @@ def connect_modbus():
     except Exception as e:
         logger.error(f"Modbus connection error: {e}")
         return False
+
+
+def _interface_has_ip(interface_name, ip_address):
+    """Return True if interface already has the target IPv4 address."""
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", "dev", interface_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        return ip_address in result.stdout
+    except Exception:
+        return False
+
+
+def ensure_pi_ip_for_modbus():
+    """Ensure eth0 has 192.168.1.10/24 before trying Modbus connection."""
+    if not sys.platform.startswith("linux"):
+        logger.info("Skipping IP setup (non-Linux platform)")
+        return True
+
+    if _interface_has_ip(PI_ETH_INTERFACE, PI_IP):
+        logger.info(f"{PI_ETH_INTERFACE} already has {PI_IP_CIDR}")
+        print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
+        return True
+
+    print(f"Configuring network: assigning {PI_IP_CIDR} to {PI_ETH_INTERFACE}...")
+    logger.info(f"Assigning {PI_IP_CIDR} to {PI_ETH_INTERFACE}")
+
+    commands = [
+        ["ip", "addr", "add", PI_IP_CIDR, "dev", PI_ETH_INTERFACE],
+        ["sudo", "-n", "ip", "addr", "add", PI_IP_CIDR, "dev", PI_ETH_INTERFACE],
+    ]
+
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            output = (result.stdout or "") + (result.stderr or "")
+
+            if result.returncode == 0:
+                logger.info(f"IP assignment successful using: {' '.join(cmd)}")
+                print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
+                return True
+
+            if "Address already assigned" in output:
+                logger.info(f"IP already assigned on {PI_ETH_INTERFACE}")
+                print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
+                return True
+
+        except FileNotFoundError:
+            logger.warning(f"Command not found: {' '.join(cmd)}")
+            continue
+        except Exception as exc:
+            logger.warning(f"Error running {' '.join(cmd)}: {exc}")
+
+    # Final verification after command attempts
+    if _interface_has_ip(PI_ETH_INTERFACE, PI_IP):
+        print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
+        return True
+
+    print("\nCould not auto-configure Pi Ethernet IP for Modbus.")
+    print(f"Run this once before starting: sudo ip addr add {PI_IP_CIDR} dev {PI_ETH_INTERFACE}")
+    print("If it says 'Address already assigned', that is OK.")
+    return False
 
 
 def read_modbus_coils():
@@ -229,6 +300,11 @@ def main():
         print("\nERROR: pymodbus not installed!")
         print("Install it with: pip install pymodbus")
         return
+
+    # Ensure Pi Ethernet IP is configured before Modbus TCP connect
+    if not ensure_pi_ip_for_modbus():
+        logger.error("Required Pi Ethernet IP is not configured")
+        return
     
     # Connect to Modbus server
     print("=" * 60)
@@ -244,7 +320,7 @@ def main():
         print("\nPlease check:")
         print("  1. PLC is powered on")
         print("  2. Ethernet cable is connected")
-        print("  3. Pi has IP 192.168.1.10 (run: ifconfig eth0)")
+        print("  3. Pi has IP 192.168.1.10 (run: ip -4 addr show dev eth0)")
         print("  4. PLC IP is correct: 192.168.1.100")
         print("  5. Modbus TCP is enabled on the LOGO! 8")
         print("=" * 60)
