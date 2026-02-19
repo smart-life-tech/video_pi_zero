@@ -220,6 +220,7 @@ else:
 list_player = vlc_instance.media_list_player_new()
 list_player.set_media_player(media_player)
 list_player.set_playback_mode(vlc.PlaybackMode(2))  # No loop - only play selected video, don't auto-advance
+video_switch_lock = threading.Lock()
 
 # Pre-load all video media objects for instant switching
 def _preload_videos():
@@ -352,15 +353,23 @@ def play_video(path_or_filename: str):
         print(f"Error: {path_or_filename} not found in preloaded videos")
         return
     idx = video_indices[path_or_filename]
-    # Pause current playback to keep vout, then jump and seek to 0 for clean switch
-    if list_player.is_playing():
-        media_player.pause()
-    list_player.play_item_at_index(idx)
-    try:
-        media_player.set_time(0)
-    except Exception as e:
-        print(f"Warning: Could not set media time to 0: {e}")
-    media_player.play()
+    with video_switch_lock:
+        # Single switch command is safer on Linux/Wayland than pause+play chaining.
+        list_player.play_item_at_index(idx)
+
+        # Only seek to 0 if player is already in a stable playback state.
+        try:
+            state = media_player.get_state()
+            stable_states = {
+                vlc.State.Playing,
+                vlc.State.Paused,
+                vlc.State.Stopped,
+            }
+            if state in stable_states:
+                media_player.set_time(0)
+        except Exception as e:
+            print(f"Warning: Could not reset media time: {e}")
+
     print(f"Switched to: {path_or_filename}")
 
 

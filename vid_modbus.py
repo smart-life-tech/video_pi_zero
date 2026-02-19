@@ -8,6 +8,7 @@ import time
 import threading
 import logging
 import subprocess
+import queue
 
 # Setup logging to file and console
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_modbus.log")
@@ -91,6 +92,34 @@ COOLDOWN_SECONDS = 5  # Minimum seconds between triggers
 
 # Global Modbus client
 modbus_client = None
+
+# Video playback queue (serialize requests from Modbus thread)
+video_queue = queue.Queue(maxsize=20)
+
+
+def queue_video_play(video_file):
+    """Queue a video request; keep latest requests flowing without blocking."""
+    try:
+        video_queue.put_nowait(video_file)
+    except queue.Full:
+        try:
+            video_queue.get_nowait()  # drop oldest
+            video_queue.put_nowait(video_file)
+        except Exception:
+            logger.warning("Video queue full; dropping request")
+
+
+def video_playback_worker():
+    """Single worker that executes play_video to avoid concurrent VLC switches."""
+    logger.info("Video playback worker started")
+    while True:
+        try:
+            video_file = video_queue.get()
+            play_video(video_file)
+        except Exception as e:
+            logger.error(f"Video playback worker error: {e}")
+        finally:
+            video_queue.task_done()
 
 # =============================================================================
 # MODBUS FUNCTIONS
@@ -220,7 +249,7 @@ def handle_modbus_trigger(action_name):
         video_file = VIDEO_FILES[action_name]
         logger.info(f"Modbus trigger: {action_name} -> {video_file}")
         print(f"  -> Playing video: {video_file}")
-        play_video(video_file)
+        queue_video_play(video_file)
     else:
         logger.debug(f"Trigger for {action_name} ignored (cooldown active)")
         print(f"  -> Trigger ignored (cooldown: {COOLDOWN_SECONDS}s)")
@@ -334,12 +363,16 @@ def main():
     print("Monitoring coils 0-4 for state changes...")
     print("=" * 60 + "\n")
     
-    # Auto-play first video on startup
-    logger.info("Auto-playing first video...")
-    play_video("Guide_steps.mp4")
-    
     # Create GUI window (black fullscreen on Pi, embedded on Windows)
     root = init_video_window()
+
+    # Start playback worker thread (serializes all play requests)
+    playback_thread = threading.Thread(target=video_playback_worker, daemon=True)
+    playback_thread.start()
+
+    # Auto-play first video on startup
+    logger.info("Auto-playing first video...")
+    queue_video_play("Guide_steps.mp4")
     
     # Start Modbus polling in background thread
     modbus_thread = threading.Thread(target=modbus_polling_loop, daemon=True)
