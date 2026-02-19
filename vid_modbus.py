@@ -166,7 +166,8 @@ modbus_client = None
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
 video_process_lock = threading.Lock()
-current_vlc_process = None
+guide_vlc_process = None
+trigger_vlc_process = None
 USE_EXTERNAL_VLC = sys.platform.startswith("linux")
 USE_VLC_RC_CONTROL = False
 VLC_RC_HOST = "127.0.0.1"
@@ -175,6 +176,30 @@ vlc_supervisor_running = False
 trigger_video_active = False
 last_requested_video = None
 idle_guide_active = False
+
+
+def _get_vlc_player_cmd():
+    if shutil.which("cvlc"):
+        return ["cvlc"]
+    if shutil.which("vlc"):
+        return ["vlc", "--intf", "dummy"]
+    return None
+
+
+def _stop_process_locked(proc):
+    if proc is None:
+        return None
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1.0)
+    except Exception:
+        pass
+    return None
 
 
 def _send_vlc_command_locked(command):
@@ -227,7 +252,7 @@ def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if current_vlc_process and current_vlc_process.poll() is not None:
+        if guide_vlc_process and guide_vlc_process.poll() is not None:
             return False
         if _send_vlc_command_locked("status"):
             return True
@@ -237,104 +262,24 @@ def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
 
 def _ensure_external_vlc_running_locked():
     """Ensure persistent external VLC process is running. Caller must hold video_process_lock."""
-    global current_vlc_process, USE_VLC_RC_CONTROL
-
-    if current_vlc_process is not None and current_vlc_process.poll() is None:
-        if not USE_VLC_RC_CONTROL:
-            return True
-        if _send_vlc_command_locked("status"):
-            return True
-
-    player_cmd = None
-    if shutil.which("cvlc"):
-        player_cmd = ["cvlc"]
-    elif shutil.which("vlc"):
-        player_cmd = ["vlc", "--intf", "dummy"]
-
+    player_cmd = _get_vlc_player_cmd()
     if player_cmd is None:
         logger.error("Neither 'cvlc' nor 'vlc' command is available")
         print("Error: Install VLC command-line player (cvlc) on Pi.")
         return False
-
-    cmd = player_cmd + [
-        "--intf", "dummy",
-        "--fullscreen",
-        "--no-audio",
-        "--no-video-title-show",
-        "--quiet",
-    ]
-
-    if USE_VLC_RC_CONTROL:
-        cmd += [
-            "--extraintf", "rc",
-            "--rc-host", f"{VLC_RC_HOST}:{VLC_RC_PORT}",
-            "--rc-fake-tty",
-        ]
-
-    try:
-        current_vlc_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        current_vlc_process = None
-        logger.error(f"Failed to start external VLC controller: {e}")
-        return False
-
-    ready = _wait_for_vlc_socket_locked(timeout_seconds=4.0)
-    if USE_VLC_RC_CONTROL and not ready:
-        logger.error("VLC RC interface did not become ready; falling back to non-RC mode")
-        _stop_external_vlc_locked()
-        USE_VLC_RC_CONTROL = False
-        cmd_no_rc = player_cmd + [
-            "--intf", "dummy",
-            "--fullscreen",
-            "--no-audio",
-            "--no-video-title-show",
-            "--quiet",
-        ]
-        try:
-            current_vlc_process = subprocess.Popen(
-                cmd_no_rc,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            logger.info("External VLC started in fallback non-RC mode")
-            return True
-        except Exception as e:
-            current_vlc_process = None
-            logger.error(f"Failed to start VLC fallback mode: {e}")
-            return False
-
-    logger.info("External VLC controller started")
     return True
 
 
 def _stop_external_vlc_locked():
     """Stop existing external VLC process. Caller must hold video_process_lock."""
-    global current_vlc_process
-    if current_vlc_process is None:
-        return
-    try:
-        if USE_VLC_RC_CONTROL:
-            _send_vlc_command_locked("shutdown")
-        if current_vlc_process.poll() is None:
-            current_vlc_process.terminate()
-            try:
-                current_vlc_process.wait(timeout=1.5)
-            except subprocess.TimeoutExpired:
-                current_vlc_process.kill()
-                current_vlc_process.wait(timeout=1.0)
-    except Exception as e:
-        logger.warning(f"Error stopping external VLC process: {e}")
-    finally:
-        current_vlc_process = None
+    global guide_vlc_process, trigger_vlc_process
+    guide_vlc_process = _stop_process_locked(guide_vlc_process)
+    trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
 
 
 def _play_idle_guide_locked():
     """Play Guide_steps in loop for idle mode. Caller must hold video_process_lock."""
-    global trigger_video_active, current_vlc_process, idle_guide_active
+    global trigger_video_active, guide_vlc_process, idle_guide_active
     guide_path = resolve_video_path("Guide_steps.mp4")
     if not os.path.exists(guide_path):
         logger.error(f"Guide video not found: {guide_path}")
@@ -344,8 +289,8 @@ def _play_idle_guide_locked():
     if (
         (not USE_VLC_RC_CONTROL)
         and idle_guide_active
-        and current_vlc_process is not None
-        and current_vlc_process.poll() is None
+        and guide_vlc_process is not None
+        and guide_vlc_process.poll() is None
     ):
         return
 
@@ -374,17 +319,21 @@ def _play_idle_guide_locked():
                     "play",
                 ])
     else:
-        _stop_external_vlc_locked()
-        player_cmd = ["cvlc"] if shutil.which("cvlc") else ["vlc", "--intf", "dummy"]
+        player_cmd = _get_vlc_player_cmd()
+        if player_cmd is None:
+            logger.error("Neither 'cvlc' nor 'vlc' command is available")
+            return
+        guide_vlc_process = _stop_process_locked(guide_vlc_process)
         cmd = player_cmd + [
             "--fullscreen",
+            "--video-on-top",
             "--loop",
             "--no-audio",
             "--no-video-title-show",
             "--quiet",
             guide_path,
         ]
-        current_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     trigger_video_active = False
     idle_guide_active = True
     logger.info("Idle guide loop active")
@@ -392,7 +341,7 @@ def _play_idle_guide_locked():
 
 def _play_trigger_once_locked(video_file):
     """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, current_vlc_process, last_requested_video, idle_guide_active
+    global trigger_video_active, trigger_vlc_process, last_requested_video, idle_guide_active
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -424,17 +373,21 @@ def _play_trigger_once_locked(video_file):
                     "play",
                 ])
     else:
-        _stop_external_vlc_locked()
-        player_cmd = ["cvlc"] if shutil.which("cvlc") else ["vlc", "--intf", "dummy"]
+        player_cmd = _get_vlc_player_cmd()
+        if player_cmd is None:
+            logger.error("Neither 'cvlc' nor 'vlc' command is available")
+            return
+        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
         cmd = player_cmd + [
             "--fullscreen",
+            "--video-on-top",
             "--play-and-exit",
             "--no-audio",
             "--no-video-title-show",
             "--quiet",
             video_path,
         ]
-        current_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        trigger_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     trigger_video_active = True
     idle_guide_active = False
     last_requested_video = video_file
@@ -445,9 +398,13 @@ def _play_trigger_once_locked(video_file):
 def _vlc_state_locked():
     """Read VLC state from RC interface. Caller must hold video_process_lock."""
     if not USE_VLC_RC_CONTROL:
-        if current_vlc_process is None:
+        if trigger_vlc_process is not None and trigger_vlc_process.poll() is None:
+            return "playing"
+        if guide_vlc_process is not None and guide_vlc_process.poll() is None:
+            return "playing"
+        if trigger_vlc_process is None and guide_vlc_process is None:
             return "stopped"
-        return "stopped" if current_vlc_process.poll() is not None else "playing"
+        return "stopped"
 
     status = _send_vlc_command_locked("status")
     lowered = status.lower()
@@ -462,7 +419,7 @@ def _vlc_state_locked():
 
 def vlc_supervisor_loop():
     """Keep VLC alive and ensure guide loops during idle."""
-    global vlc_supervisor_running
+    global vlc_supervisor_running, trigger_video_active, idle_guide_active
     logger.info("VLC supervisor started")
     while vlc_supervisor_running:
         if not USE_EXTERNAL_VLC:
@@ -474,6 +431,12 @@ def vlc_supervisor_loop():
                 if not _ensure_external_vlc_running_locked():
                     time.sleep(0.6)
                     continue
+
+                # In non-RC mode, detect trigger completion by trigger process exit.
+                if (not USE_VLC_RC_CONTROL) and trigger_video_active:
+                    if trigger_vlc_process is None or trigger_vlc_process.poll() is not None:
+                        trigger_video_active = False
+                        idle_guide_active = False
 
                 state = _vlc_state_locked()
                 # If a trigger finished (stopped), immediately return to looping guide.
