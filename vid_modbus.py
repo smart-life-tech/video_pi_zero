@@ -66,6 +66,10 @@ def resolve_video_path(filename: str) -> str:
 if sys.platform.startswith("linux"):
     # On Pi/Linux, avoid importing vid.py to prevent in-process libVLC segfaults.
     def init_video_window():
+        # Optional only: overlay can interfere with VLC stacking on some Pi setups.
+        if os.environ.get("VID_MODBUS_BLACK_OVERLAY", "0") != "1":
+            return None
+
         if tk is None:
             return None
         try:
