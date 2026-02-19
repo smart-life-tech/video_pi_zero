@@ -341,7 +341,7 @@ def _play_idle_guide_locked():
 
 def _play_trigger_once_locked(video_file):
     """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, trigger_vlc_process, last_requested_video, idle_guide_active
+    global trigger_video_active, trigger_vlc_process, guide_vlc_process, last_requested_video, idle_guide_active
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -377,6 +377,11 @@ def _play_trigger_once_locked(video_file):
         if player_cmd is None:
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
+
+        # Idle guide must not overlap with a trigger video.
+        guide_vlc_process = _stop_process_locked(guide_vlc_process)
+        idle_guide_active = False
+
         trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
         cmd = player_cmd + [
             "--fullscreen",
