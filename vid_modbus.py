@@ -168,6 +168,7 @@ video_queue = queue.Queue(maxsize=20)
 video_process_lock = threading.Lock()
 guide_vlc_process = None
 trigger_vlc_process = None
+black_vlc_process = None
 USE_EXTERNAL_VLC = sys.platform.startswith("linux")
 USE_VLC_RC_CONTROL = False
 VLC_RC_HOST = "127.0.0.1"
@@ -176,6 +177,8 @@ vlc_supervisor_running = False
 trigger_video_active = False
 last_requested_video = None
 idle_guide_active = False
+idle_mode_requested = False
+BLACK_IMAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_black.ppm")
 
 
 def _get_vlc_player_cmd():
@@ -184,6 +187,17 @@ def _get_vlc_player_cmd():
     if shutil.which("vlc"):
         return ["vlc", "--intf", "dummy"]
     return None
+
+
+def _ensure_black_image_file():
+    """Create a tiny black image used for fullscreen black background playback."""
+    if os.path.exists(BLACK_IMAGE_PATH):
+        return
+    try:
+        with open(BLACK_IMAGE_PATH, "w", encoding="ascii") as file:
+            file.write("P3\n1 1\n255\n0 0 0\n")
+    except Exception as e:
+        logger.warning(f"Could not create black image file: {e}")
 
 
 def _stop_process_locked(proc):
@@ -272,14 +286,46 @@ def _ensure_external_vlc_running_locked():
 
 def _stop_external_vlc_locked():
     """Stop existing external VLC process. Caller must hold video_process_lock."""
-    global guide_vlc_process, trigger_vlc_process
+    global guide_vlc_process, trigger_vlc_process, black_vlc_process
     guide_vlc_process = _stop_process_locked(guide_vlc_process)
     trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
+    black_vlc_process = _stop_process_locked(black_vlc_process)
+
+
+def _ensure_black_screen_loop_locked():
+    """Ensure persistent black fullscreen process is running."""
+    global black_vlc_process
+
+    if black_vlc_process is not None and black_vlc_process.poll() is None:
+        return
+
+    _ensure_black_image_file()
+    if not os.path.exists(BLACK_IMAGE_PATH):
+        logger.error("Black image file is unavailable")
+        return
+
+    player_cmd = _get_vlc_player_cmd()
+    if player_cmd is None:
+        logger.error("Neither 'cvlc' nor 'vlc' command is available")
+        return
+
+    black_vlc_process = _stop_process_locked(black_vlc_process)
+    cmd = player_cmd + [
+        "--fullscreen",
+        "--loop",
+        "--image-duration", "-1",
+        "--no-audio",
+        "--no-video-title-show",
+        "--quiet",
+        BLACK_IMAGE_PATH,
+    ]
+    black_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _play_idle_guide_locked():
     """Play Guide_steps in loop for idle mode. Caller must hold video_process_lock."""
-    global trigger_video_active, guide_vlc_process, idle_guide_active
+    global trigger_video_active, guide_vlc_process, black_vlc_process, idle_guide_active, idle_mode_requested
+    idle_mode_requested = True
     guide_path = resolve_video_path("Guide_steps.mp4")
     if not os.path.exists(guide_path):
         logger.error(f"Guide video not found: {guide_path}")
@@ -323,10 +369,10 @@ def _play_idle_guide_locked():
         if player_cmd is None:
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
+        black_vlc_process = _stop_process_locked(black_vlc_process)
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         cmd = player_cmd + [
             "--fullscreen",
-            "--video-on-top",
             "--loop",
             "--no-audio",
             "--no-video-title-show",
@@ -341,7 +387,7 @@ def _play_idle_guide_locked():
 
 def _play_trigger_once_locked(video_file):
     """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, trigger_vlc_process, guide_vlc_process, last_requested_video, idle_guide_active
+    global trigger_video_active, trigger_vlc_process, guide_vlc_process, black_vlc_process, last_requested_video, idle_guide_active, idle_mode_requested
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -378,9 +424,15 @@ def _play_trigger_once_locked(video_file):
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
 
+        # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
+        idle_mode_requested = False
+
         # Idle guide must not overlap with a trigger video.
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         idle_guide_active = False
+
+        # Keep a black fullscreen background alive so terminal never shows between steps.
+        _ensure_black_screen_loop_locked()
 
         trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
         cmd = player_cmd + [
@@ -407,6 +459,8 @@ def _vlc_state_locked():
             return "playing"
         if guide_vlc_process is not None and guide_vlc_process.poll() is None:
             return "playing"
+        if black_vlc_process is not None and black_vlc_process.poll() is None:
+            return "playing"
         if trigger_vlc_process is None and guide_vlc_process is None:
             return "stopped"
         return "stopped"
@@ -424,7 +478,7 @@ def _vlc_state_locked():
 
 def vlc_supervisor_loop():
     """Keep VLC alive and ensure guide loops during idle."""
-    global vlc_supervisor_running, trigger_video_active, idle_guide_active
+    global vlc_supervisor_running, trigger_video_active, idle_guide_active, trigger_vlc_process
     logger.info("VLC supervisor started")
     while vlc_supervisor_running:
         if not USE_EXTERNAL_VLC:
@@ -442,17 +496,31 @@ def vlc_supervisor_loop():
                     if trigger_vlc_process is None or trigger_vlc_process.poll() is not None:
                         trigger_video_active = False
                         idle_guide_active = False
+                        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
 
                 state = _vlc_state_locked()
                 # If a trigger finished (stopped), immediately return to looping guide.
                 if trigger_video_active and state == "stopped":
-                    _play_idle_guide_locked()
+                    if idle_mode_requested:
+                        _play_idle_guide_locked()
+                    else:
+                        _ensure_black_screen_loop_locked()
                 # Ensure idle guide is always active when nothing is playing.
                 elif (not trigger_video_active) and state == "stopped":
-                    _play_idle_guide_locked()
+                    if idle_mode_requested:
+                        _play_idle_guide_locked()
+                    else:
+                        _ensure_black_screen_loop_locked()
                 # Unknown often means RC transient; make sure something is still visible.
                 elif state == "unknown" and not trigger_video_active:
-                    _play_idle_guide_locked()
+                    if idle_mode_requested:
+                        _play_idle_guide_locked()
+                    else:
+                        _ensure_black_screen_loop_locked()
+
+                # Keep black background persistent when guide mode is not requested.
+                if (not trigger_video_active) and (not idle_mode_requested):
+                    _ensure_black_screen_loop_locked()
         except Exception as e:
             logger.warning(f"VLC supervisor warning: {e}")
 
@@ -756,9 +824,10 @@ def main():
         supervisor_thread = threading.Thread(target=vlc_supervisor_loop, daemon=True)
         supervisor_thread.start()
 
-    # Auto-play first video on startup
-    logger.info("Auto-playing first video...")
-    queue_video_play("Guide_steps.mp4")
+    # Start in black idle screen until PLC requests Guide_steps or a trigger video
+    logger.info("Starting in black idle screen")
+    with video_process_lock:
+        _ensure_black_screen_loop_locked()
     
     # Start Modbus polling in background thread
     modbus_thread = threading.Thread(target=modbus_polling_loop, daemon=True)
