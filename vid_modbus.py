@@ -189,6 +189,25 @@ def _get_vlc_player_cmd():
     return None
 
 
+def hide_terminal_window_linux():
+    """Best-effort minimize of active terminal window on Linux/X11."""
+    if not sys.platform.startswith("linux"):
+        return
+
+    commands = [
+        ["xdotool", "getactivewindow", "windowminimize"],
+        ["wmctrl", "-r", ":ACTIVE:", "-b", "add,hidden"],
+    ]
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                logger.info(f"Minimized terminal window using: {' '.join(cmd)}")
+                return
+        except Exception:
+            continue
+
+
 def _ensure_black_image_file():
     """Create a tiny black image used for fullscreen black background playback."""
     if os.path.exists(BLACK_IMAGE_PATH):
@@ -434,7 +453,7 @@ def _play_trigger_once_locked(video_file):
         # Keep a black fullscreen background alive so terminal never shows between steps.
         _ensure_black_screen_loop_locked()
 
-        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
+        previous_trigger = trigger_vlc_process
         cmd = player_cmd + [
             "--fullscreen",
             "--video-on-top",
@@ -444,7 +463,9 @@ def _play_trigger_once_locked(video_file):
             "--quiet",
             video_path,
         ]
-        trigger_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        trigger_vlc_process = new_trigger
+        previous_trigger = _stop_process_locked(previous_trigger)
     trigger_video_active = True
     idle_guide_active = False
     last_requested_video = video_file
@@ -810,6 +831,9 @@ def main():
     print(f"Connected to PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
     print("Monitoring coils 0-4 for state changes...")
     print("=" * 60 + "\n")
+
+    # Hide terminal window to avoid visible desktop/terminal flashes during video switches.
+    hide_terminal_window_linux()
     
     # Create GUI window (black fullscreen on Pi, embedded on Windows)
     root = init_video_window()
