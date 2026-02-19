@@ -9,6 +9,7 @@ import threading
 import logging
 import subprocess
 import queue
+import shutil
 
 # Improve VLC stability on Raspberry Pi/Wayland by preferring X11-compatible backend.
 if sys.platform.startswith("linux"):
@@ -46,23 +47,41 @@ try:
 except ImportError:
     tk = None
 
-# Import VLC setup from original vid.py
-import importlib.util
-spec = importlib.util.spec_from_file_location("vid_original", os.path.join(os.path.dirname(__file__), "vid.py"))
-if spec and spec.loader:
-    vid_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(vid_module)
-    _setup_vlc_windows = vid_module._setup_vlc_windows
-    play_video = vid_module.play_video
-    init_video_window = vid_module.init_video_window
-    resolve_video_path = vid_module.resolve_video_path
-    vlc_instance = vid_module.vlc_instance
-    media_player = vid_module.media_player
-    vlc_lib = vid_module.vlc
+def resolve_video_path(filename: str) -> str:
+    """Resolve video path for both Pi and Windows runtime."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        filename,
+        os.path.join(script_dir, filename),
+        os.path.join(os.getcwd(), "Videos", filename),
+        os.path.join("/home/helmwash/video_pi_zero", filename),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return filename
+
+
+if sys.platform.startswith("linux"):
+    # On Pi/Linux, avoid importing vid.py to prevent in-process libVLC segfaults.
+    def init_video_window():
+        return None
+
+    def play_video(_):
+        return None
 else:
-    # Fallback - you may need to copy these functions here
-    logger.error("Could not import from vid.py - copy necessary functions manually")
-    sys.exit(1)
+    # Import VLC setup from original vid.py (Windows path)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("vid_original", os.path.join(os.path.dirname(__file__), "vid.py"))
+    if spec and spec.loader:
+        vid_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vid_module)
+        _setup_vlc_windows = vid_module._setup_vlc_windows
+        play_video = vid_module.play_video
+        init_video_window = vid_module.init_video_window
+    else:
+        logger.error("Could not import from vid.py - copy necessary functions manually")
+        sys.exit(1)
 
 # =============================================================================
 # MODBUS CONFIGURATION
@@ -104,6 +123,77 @@ modbus_client = None
 
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
+video_process_lock = threading.Lock()
+current_vlc_process = None
+USE_EXTERNAL_VLC = sys.platform.startswith("linux")
+
+
+def _stop_external_vlc_locked():
+    """Stop existing external VLC process. Caller must hold video_process_lock."""
+    global current_vlc_process
+    if current_vlc_process is None:
+        return
+    try:
+        if current_vlc_process.poll() is None:
+            current_vlc_process.terminate()
+            try:
+                current_vlc_process.wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                current_vlc_process.kill()
+                current_vlc_process.wait(timeout=1.0)
+    except Exception as e:
+        logger.warning(f"Error stopping external VLC process: {e}")
+    finally:
+        current_vlc_process = None
+
+
+def play_video_safe(video_file):
+    """Play video robustly; Linux uses external VLC process to avoid libVLC segfaults."""
+    global current_vlc_process
+
+    if not USE_EXTERNAL_VLC:
+        play_video(video_file)
+        return
+
+    video_path = resolve_video_path(video_file)
+    if not os.path.exists(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        print(f"Error: Video file not found: {video_path}")
+        return
+
+    player_cmd = None
+    if shutil.which("cvlc"):
+        player_cmd = ["cvlc"]
+    elif shutil.which("vlc"):
+        player_cmd = ["vlc", "--intf", "dummy"]
+
+    if player_cmd is None:
+        logger.error("Neither 'cvlc' nor 'vlc' command is available")
+        print("Error: Install VLC command-line player (cvlc) on Pi.")
+        return
+
+    cmd = player_cmd + [
+        "--fullscreen",
+        "--no-audio",
+        "--no-video-title-show",
+        "--quiet",
+        video_path,
+    ]
+
+    with video_process_lock:
+        _stop_external_vlc_locked()
+        try:
+            current_vlc_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"Started external VLC for {video_file}")
+            print(f"Switched to: {video_file}")
+        except Exception as e:
+            current_vlc_process = None
+            logger.error(f"Failed to start external VLC for {video_file}: {e}")
+            print(f"Error: Could not play video {video_file}")
 
 
 def queue_video_play(video_file):
@@ -125,19 +215,7 @@ def video_playback_worker():
         video_file = None
         try:
             video_file = video_queue.get()
-            play_video(video_file)
-
-            # Verify playback is alive; recover if VLC dropped window/output.
-            time.sleep(0.25)
-            state = media_player.get_state()
-            if state in (vlc_lib.State.Error, vlc_lib.State.Ended, vlc_lib.State.Stopped):
-                logger.warning(f"Playback state after switch is {state}; forcing recovery for {video_file}")
-                media_path = resolve_video_path(video_file)
-                media = vlc_instance.media_new(media_path)
-                media_player.set_media(media)
-                if sys.platform.startswith("linux"):
-                    media_player.set_fullscreen(True)
-                media_player.play()
+            play_video_safe(video_file)
         except Exception as e:
             logger.error(f"Video playback worker error: {e}")
         finally:
@@ -419,6 +497,10 @@ def main():
             logger.info("Interrupted by user")
     
     # Cleanup
+    if USE_EXTERNAL_VLC:
+        with video_process_lock:
+            _stop_external_vlc_locked()
+
     if modbus_client:
         modbus_client.close()
     logger.info("Application shutdown complete")
