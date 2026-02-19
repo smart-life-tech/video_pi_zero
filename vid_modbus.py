@@ -132,6 +132,7 @@ VLC_RC_HOST = "127.0.0.1"
 VLC_RC_PORT = 4213
 vlc_supervisor_running = False
 trigger_video_active = False
+last_requested_video = None
 
 
 def _send_vlc_command_locked(command):
@@ -163,6 +164,18 @@ def _send_vlc_command_locked(command):
             client.close()
         except Exception:
             pass
+
+
+def _quote_vlc_path(path_value):
+    """Quote path for VLC RC commands."""
+    return '"' + path_value.replace('"', '\\"') + '"'
+
+
+def _run_vlc_commands_locked(commands, delay_seconds=0.06):
+    """Run RC commands with tiny pacing to avoid command-race drops on Pi."""
+    for cmd in commands:
+        _send_vlc_command_locked(cmd)
+        time.sleep(delay_seconds)
 
 
 def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
@@ -286,11 +299,29 @@ def _play_idle_guide_locked():
         return
 
     if USE_VLC_RC_CONTROL:
-        _send_vlc_command_locked("clear")
-        _send_vlc_command_locked("repeat on")
-        _send_vlc_command_locked("loop off")
-        _send_vlc_command_locked(f"add {guide_path}")
-        _send_vlc_command_locked("play")
+        _run_vlc_commands_locked([
+            "stop",
+            "clear",
+            "repeat on",
+            "loop off",
+            f"add {_quote_vlc_path(guide_path)}",
+            "play",
+        ])
+
+        # Verify idle playback is really running; recover once if not.
+        time.sleep(0.2)
+        if _vlc_state_locked() != "playing":
+            logger.warning("Idle guide did not enter playing state, restarting VLC controller")
+            _stop_external_vlc_locked()
+            if _ensure_external_vlc_running_locked():
+                _run_vlc_commands_locked([
+                    "stop",
+                    "clear",
+                    "repeat on",
+                    "loop off",
+                    f"add {_quote_vlc_path(guide_path)}",
+                    "play",
+                ])
     else:
         _stop_external_vlc_locked()
         player_cmd = ["cvlc"] if shutil.which("cvlc") else ["vlc", "--intf", "dummy"]
@@ -309,7 +340,7 @@ def _play_idle_guide_locked():
 
 def _play_trigger_once_locked(video_file):
     """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, current_vlc_process
+    global trigger_video_active, current_vlc_process, last_requested_video
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -317,11 +348,29 @@ def _play_trigger_once_locked(video_file):
         return
 
     if USE_VLC_RC_CONTROL:
-        _send_vlc_command_locked("clear")
-        _send_vlc_command_locked("repeat off")
-        _send_vlc_command_locked("loop off")
-        _send_vlc_command_locked(f"add {video_path}")
-        _send_vlc_command_locked("play")
+        _run_vlc_commands_locked([
+            "stop",
+            "clear",
+            "repeat off",
+            "loop off",
+            f"add {_quote_vlc_path(video_path)}",
+            "play",
+        ])
+
+        # Verify trigger playback is really active; restart and retry once if needed.
+        time.sleep(0.25)
+        if _vlc_state_locked() != "playing":
+            logger.warning(f"Trigger switch failed for {video_file}, restarting VLC and retrying")
+            _stop_external_vlc_locked()
+            if _ensure_external_vlc_running_locked():
+                _run_vlc_commands_locked([
+                    "stop",
+                    "clear",
+                    "repeat off",
+                    "loop off",
+                    f"add {_quote_vlc_path(video_path)}",
+                    "play",
+                ])
     else:
         _stop_external_vlc_locked()
         player_cmd = ["cvlc"] if shutil.which("cvlc") else ["vlc", "--intf", "dummy"]
@@ -335,6 +384,7 @@ def _play_trigger_once_locked(video_file):
         ]
         current_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     trigger_video_active = True
+    last_requested_video = video_file
     logger.info(f"Switched to trigger video: {video_file}")
     print(f"Switched to: {video_file}")
 
@@ -378,6 +428,9 @@ def vlc_supervisor_loop():
                     _play_idle_guide_locked()
                 # Ensure idle guide is always active when nothing is playing.
                 elif (not trigger_video_active) and state == "stopped":
+                    _play_idle_guide_locked()
+                # Unknown often means RC transient; make sure something is still visible.
+                elif state == "unknown" and not trigger_video_active:
                     _play_idle_guide_locked()
         except Exception as e:
             logger.warning(f"VLC supervisor warning: {e}")
