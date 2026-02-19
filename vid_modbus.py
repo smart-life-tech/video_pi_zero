@@ -66,7 +66,23 @@ def resolve_video_path(filename: str) -> str:
 if sys.platform.startswith("linux"):
     # On Pi/Linux, avoid importing vid.py to prevent in-process libVLC segfaults.
     def init_video_window():
-        return None
+        if tk is None:
+            return None
+        try:
+            root = tk.Tk()
+            root.title("Video Background")
+            root.configure(bg="black")
+            root.overrideredirect(True)
+            root.attributes("-fullscreen", True)
+            root.attributes("-topmost", True)
+            root.bind("<Escape>", lambda _e: root.destroy())
+            root.focus_force()
+            root.update_idletasks()
+            root.update()
+            return root
+        except Exception as exc:
+            logger.warning(f"Could not create Linux black overlay window: {exc}")
+            return None
 
     def play_video(_):
         return None
