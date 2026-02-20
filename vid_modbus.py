@@ -388,9 +388,7 @@ def _play_idle_guide_locked():
         if player_cmd is None:
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
-
-        # Keep black fullscreen running underneath to avoid terminal/desktop flashes.
-        _ensure_black_screen_loop_locked()
+        black_vlc_process = _stop_process_locked(black_vlc_process)
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         cmd = player_cmd + [
             "--fullscreen",
@@ -448,13 +446,12 @@ def _play_trigger_once_locked(video_file):
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
         idle_mode_requested = False
 
-        # Keep a black fullscreen background alive before stopping guide,
-        # so no desktop/terminal is exposed during the first switch.
-        _ensure_black_screen_loop_locked()
-
         # Idle guide must not overlap with a trigger video.
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         idle_guide_active = False
+
+        # Keep a black fullscreen background alive so terminal never shows between steps.
+        _ensure_black_screen_loop_locked()
 
         previous_trigger = trigger_vlc_process
         cmd = player_cmd + [
