@@ -261,7 +261,6 @@ def _force_vlc_window_fullscreen_linux(process_handle):
                 subprocess.run(["xdotool", "windowmove", window_id, "0", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 subprocess.run(["xdotool", "windowsize", window_id, "100%", "100%"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                subprocess.run(["xdotool", "windowactivate", "--sync", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             return
         except Exception:
             time.sleep(0.1)
@@ -526,6 +525,9 @@ def _play_trigger_once_locked(video_file):
 
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
         idle_mode_requested = False
+
+        # First transition can briefly expose terminal if focus returns to shell.
+        hide_terminal_window_linux()
 
         # Keep black fullscreen background alive before stopping guide.
         _ensure_black_screen_loop_locked()
