@@ -675,6 +675,11 @@ def connect_modbus():
     """Connect to the Siemens LOGO! 8 PLC via Modbus TCP"""
     global modbus_client
     try:
+        # Ensure Pi Ethernet IP is configured before Modbus TCP connect
+        if not ensure_pi_ip_for_modbus():
+            logger.error("Required Pi Ethernet IP is not configured")
+            return False
+
         if modbus_client:
             try:
                 modbus_client.close()
@@ -838,11 +843,7 @@ def modbus_polling_loop():
             coil_states = read_modbus_coils()
             
             if coil_states is None:
-                # Ensure Pi Ethernet IP is configured before Modbus TCP connect
-                if not ensure_pi_ip_for_modbus():
-                    logger.error("Required Pi Ethernet IP is not configured")
-                else:
-                    logger.warning("Failed to read coils; check Modbus connection and PLC status")
+                logger.warning("Failed to read coils; check Modbus connection and PLC status")
                 # Connection lost, try to reconnect
                 logger.warning("Lost Modbus connection, attempting to reconnect...")
                 time.sleep(2)
