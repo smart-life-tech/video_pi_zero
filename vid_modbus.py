@@ -129,7 +129,7 @@ else:
 # MODBUS CONFIGURATION
 # =============================================================================
 MODBUS_SERVER_IP = "192.168.1.100"  # Change to your Siemens LOGO! 8 IP address
-MODBUS_SERVER_PORT = 504  # Standard Modbus TCP port
+MODBUS_SERVER_PORT = int(os.environ.get("MODBUS_SERVER_PORT", "504"))  # Standard Modbus TCP port
 MODBUS_UNIT_ID = 1  # Modbus slave/unit ID (typically 1 for LOGO!)
 PI_ETH_INTERFACE = "eth0"
 PI_IP = "192.168.1.10"
@@ -185,8 +185,93 @@ def _get_vlc_player_cmd():
     if shutil.which("cvlc"):
         return ["cvlc"]
     if shutil.which("vlc"):
-        return ["vlc", "--intf", "dummy"]
+        return ["vlc", "-I", "dummy"]
     return None
+
+
+def _vlc_fullscreen_base_args():
+    """Common VLC args for cleaner fullscreen playback."""
+    return [
+        "--fullscreen",
+        "--video-on-top",
+        "--no-video-title-show",
+        "--no-video-deco",
+        "--no-qt-fs-controller",
+        "--quiet",
+    ]
+
+
+def _force_vlc_window_fullscreen_linux(process_handle):
+    """Best-effort X11 window-manager enforcement for borderless fullscreen VLC."""
+    if not sys.platform.startswith("linux") or process_handle is None:
+        return
+
+    if shutil.which("xdotool") is None:
+        return
+
+    pid = str(process_handle.pid)
+    deadline = time.time() + 2.5
+
+    while time.time() < deadline:
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--pid", pid],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            if not window_ids:
+                time.sleep(0.1)
+                continue
+
+            for window_id in window_ids:
+                if shutil.which("xprop"):
+                    subprocess.run(
+                        [
+                            "xprop",
+                            "-id",
+                            window_id,
+                            "-f",
+                            "_MOTIF_WM_HINTS",
+                            "32c",
+                            "-set",
+                            "_MOTIF_WM_HINTS",
+                            "2, 0, 0, 0, 0",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+
+                if shutil.which("wmctrl"):
+                    subprocess.run(
+                        ["wmctrl", "-i", "-r", window_id, "-b", "remove,maximized_vert,maximized_horz"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+
+                subprocess.run(["xdotool", "windowmove", window_id, "0", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                subprocess.run(["xdotool", "windowsize", window_id, "100%", "100%"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                subprocess.run(["xdotool", "windowactivate", "--sync", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            return
+        except Exception:
+            time.sleep(0.1)
+
+
+def _post_launch_fix_vlc_window(process_handle):
+    """Run fullscreen/decorations fix asynchronously after VLC spawn."""
+    if not sys.platform.startswith("linux"):
+        return
+    threading.Thread(target=_force_vlc_window_fullscreen_linux, args=(process_handle,), daemon=True).start()
 
 
 def hide_terminal_window_linux():
@@ -329,16 +414,14 @@ def _ensure_black_screen_loop_locked():
         return
 
     black_vlc_process = _stop_process_locked(black_vlc_process)
-    cmd = player_cmd + [
-        "--fullscreen",
+    cmd = player_cmd + _vlc_fullscreen_base_args() + [
         "--loop",
         "--image-duration", "-1",
         "--no-audio",
-        "--no-video-title-show",
-        "--quiet",
         BLACK_IMAGE_PATH,
     ]
     black_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _post_launch_fix_vlc_window(black_vlc_process)
 
 
 def _play_idle_guide_locked():
@@ -388,17 +471,15 @@ def _play_idle_guide_locked():
         if player_cmd is None:
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
-        black_vlc_process = _stop_process_locked(black_vlc_process)
+        _ensure_black_screen_loop_locked()
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
-        cmd = player_cmd + [
-            "--fullscreen",
+        cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--loop",
             "--no-audio",
-            "--no-video-title-show",
-            "--quiet",
             guide_path,
         ]
         guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _post_launch_fix_vlc_window(guide_vlc_process)
     trigger_video_active = False
     idle_guide_active = True
     logger.info("Idle guide loop active")
@@ -446,24 +527,21 @@ def _play_trigger_once_locked(video_file):
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
         idle_mode_requested = False
 
+        # Keep black fullscreen background alive before stopping guide.
+        _ensure_black_screen_loop_locked()
+
         # Idle guide must not overlap with a trigger video.
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         idle_guide_active = False
 
-        # Keep a black fullscreen background alive so terminal never shows between steps.
-        _ensure_black_screen_loop_locked()
-
         previous_trigger = trigger_vlc_process
-        cmd = player_cmd + [
-            "--fullscreen",
-            "--video-on-top",
+        cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--play-and-exit",
             "--no-audio",
-            "--no-video-title-show",
-            "--quiet",
             video_path,
         ]
         new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
         previous_trigger = _stop_process_locked(previous_trigger)
     trigger_video_active = True
@@ -597,6 +675,11 @@ def connect_modbus():
     """Connect to the Siemens LOGO! 8 PLC via Modbus TCP"""
     global modbus_client
     try:
+        if modbus_client:
+            try:
+                modbus_client.close()
+            except Exception:
+                pass
         logger.info(f"Connecting to Modbus server at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
         modbus_client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT)
         
@@ -609,6 +692,17 @@ def connect_modbus():
     except Exception as e:
         logger.error(f"Modbus connection error: {e}")
         return False
+
+
+def _read_coils_with_unit_id(start_addr, count):
+    """Read coils while handling pymodbus API differences for unit/slave/device_id."""
+    try:
+        return modbus_client.read_coils(start_addr, count=count, device_id=MODBUS_UNIT_ID)
+    except TypeError:
+        try:
+            return modbus_client.read_coils(start_addr, count=count, slave=MODBUS_UNIT_ID)
+        except TypeError:
+            return modbus_client.read_coils(start_addr, count=count, unit=MODBUS_UNIT_ID)
 
 
 def _interface_has_ip(interface_name, ip_address):
@@ -686,7 +780,7 @@ def read_modbus_coils():
     
     try:
         # Read 5 coils starting from address 0
-        result = modbus_client.read_coils(0, count=5)
+        result = _read_coils_with_unit_id(0, 5)
         
         if result.isError():
             logger.error(f"Error reading coils: {result}")
@@ -696,6 +790,11 @@ def read_modbus_coils():
     
     except Exception as e:
         logger.error(f"Exception reading Modbus coils: {e}")
+        if modbus_client:
+            try:
+                modbus_client.close()
+            except Exception:
+                pass
         return None
 
 
