@@ -185,8 +185,20 @@ def _get_vlc_player_cmd():
     if shutil.which("cvlc"):
         return ["cvlc"]
     if shutil.which("vlc"):
-        return ["vlc", "--intf", "dummy"]
+        return ["vlc", "-I", "dummy"]
     return None
+
+
+def _vlc_fullscreen_base_args():
+    """Common VLC args for borderless, always-on-top fullscreen playback."""
+    return [
+        "--fullscreen",
+        "--video-on-top",
+        "--no-video-title-show",
+        "--no-video-deco",
+        "--no-qt-fs-controller",
+        "--quiet",
+    ]
 
 
 def hide_terminal_window_linux():
@@ -329,13 +341,10 @@ def _ensure_black_screen_loop_locked():
         return
 
     black_vlc_process = _stop_process_locked(black_vlc_process)
-    cmd = player_cmd + [
-        "--fullscreen",
+    cmd = player_cmd + _vlc_fullscreen_base_args() + [
         "--loop",
         "--image-duration", "-1",
         "--no-audio",
-        "--no-video-title-show",
-        "--quiet",
         BLACK_IMAGE_PATH,
     ]
     black_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -390,12 +399,9 @@ def _play_idle_guide_locked():
             return
         black_vlc_process = _stop_process_locked(black_vlc_process)
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
-        cmd = player_cmd + [
-            "--fullscreen",
+        cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--loop",
             "--no-audio",
-            "--no-video-title-show",
-            "--quiet",
             guide_path,
         ]
         guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -454,13 +460,9 @@ def _play_trigger_once_locked(video_file):
         _ensure_black_screen_loop_locked()
 
         previous_trigger = trigger_vlc_process
-        cmd = player_cmd + [
-            "--fullscreen",
-            "--video-on-top",
+        cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--play-and-exit",
             "--no-audio",
-            "--no-video-title-show",
-            "--quiet",
             video_path,
         ]
         new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
