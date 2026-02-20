@@ -273,6 +273,17 @@ def _post_launch_fix_vlc_window(process_handle):
     threading.Thread(target=_force_vlc_window_fullscreen_linux, args=(process_handle,), daemon=True).start()
 
 
+def _prepare_transition_cover_locked():
+    """Ensure black cover is visible before any player handoff."""
+    if not sys.platform.startswith("linux"):
+        return
+    hide_terminal_window_linux()
+    _ensure_black_screen_loop_locked()
+    if black_vlc_process is not None and black_vlc_process.poll() is None:
+        _post_launch_fix_vlc_window(black_vlc_process)
+    time.sleep(0.08)
+
+
 def hide_terminal_window_linux():
     """Best-effort minimize of active terminal window on Linux/X11."""
     if not sys.platform.startswith("linux"):
@@ -470,7 +481,7 @@ def _play_idle_guide_locked():
         if player_cmd is None:
             logger.error("Neither 'cvlc' nor 'vlc' command is available")
             return
-        _ensure_black_screen_loop_locked()
+        _prepare_transition_cover_locked()
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
         cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--loop",
@@ -526,11 +537,8 @@ def _play_trigger_once_locked(video_file):
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
         idle_mode_requested = False
 
-        # First transition can briefly expose terminal if focus returns to shell.
-        hide_terminal_window_linux()
-
-        # Keep black fullscreen background alive before stopping guide.
-        _ensure_black_screen_loop_locked()
+        # Keep black cover visible before and during transition.
+        _prepare_transition_cover_locked()
 
         # Idle guide must not overlap with a trigger video.
         guide_vlc_process = _stop_process_locked(guide_vlc_process)
@@ -855,6 +863,8 @@ def modbus_polling_loop():
                 else:
                     # Reset last states after reconnection
                     last_coil_states = [False] * 5
+                    # Re-hide terminal after reconnect logs to avoid on-screen flashes.
+                    hide_terminal_window_linux()
                     continue
             
             # Check each coil for rising edge (transition from False to True)
