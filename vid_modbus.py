@@ -627,11 +627,84 @@ def _interface_has_ip(interface_name, ip_address):
         return False
 
 
+def _interface_is_up(interface_name):
+    """Return True if the network interface state is UP."""
+    try:
+        result = subprocess.run(
+            ["ip", "link", "show", "dev", interface_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        return " state UP " in result.stdout
+    except Exception:
+        return False
+
+
+def _ensure_interface_up(interface_name):
+    """Ensure interface is administratively UP."""
+    if _interface_is_up(interface_name):
+        logger.info(f"{interface_name} link already up")
+        return True
+
+    logger.info(f"Bringing interface up: {interface_name}")
+    commands = [
+        ["ip", "link", "set", interface_name, "up"],
+        ["sudo", "-n", "ip", "link", "set", interface_name, "up"],
+    ]
+
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode == 0 and _interface_is_up(interface_name):
+                logger.info(f"Interface up using: {' '.join(cmd)}")
+                return True
+        except FileNotFoundError:
+            logger.warning(f"Command not found: {' '.join(cmd)}")
+            continue
+        except Exception as exc:
+            logger.warning(f"Error running {' '.join(cmd)}: {exc}")
+
+    logger.error(f"Could not set {interface_name} UP")
+    return False
+
+
+def ping_modbus_server_once():
+    """Run a one-shot ping to the PLC IP for startup visibility."""
+    if not sys.platform.startswith("linux"):
+        return False
+
+    logger.info(f"Pinging PLC once: {MODBUS_SERVER_IP}")
+    cmd = ["ping", "-c", "1", MODBUS_SERVER_IP]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            print(f"✓ Ping OK: {MODBUS_SERVER_IP}")
+            logger.info(f"Ping OK: {MODBUS_SERVER_IP}")
+            return True
+        print(f"⚠ Ping failed: {MODBUS_SERVER_IP}")
+        logger.warning(f"Ping failed ({result.returncode}) to {MODBUS_SERVER_IP}")
+        return False
+    except FileNotFoundError:
+        logger.warning("ping command not found")
+        return False
+    except Exception as exc:
+        logger.warning(f"Ping error to {MODBUS_SERVER_IP}: {exc}")
+        return False
+
+
 def ensure_pi_ip_for_modbus():
-    """Ensure eth0 has 192.168.1.10/24 before trying Modbus connection."""
+    """Ensure eth0 is UP and has 192.168.1.10/24 before Modbus connection."""
     if not sys.platform.startswith("linux"):
         logger.info("Skipping IP setup (non-Linux platform)")
         return True
+
+    if not _ensure_interface_up(PI_ETH_INTERFACE):
+        print(f"\nCould not bring {PI_ETH_INTERFACE} up automatically.")
+        print(f"Run this once before starting: sudo ip link set {PI_ETH_INTERFACE} up")
+        return False
 
     if _interface_has_ip(PI_ETH_INTERFACE, PI_IP):
         logger.info(f"{PI_ETH_INTERFACE} already has {PI_IP_CIDR}")
@@ -803,6 +876,9 @@ def main():
     if not ensure_pi_ip_for_modbus():
         logger.error("Required Pi Ethernet IP is not configured")
         return
+
+    # Quick startup reachability check (non-fatal)
+    ping_modbus_server_once()
     
     # Connect to Modbus server
     print("=" * 60)
