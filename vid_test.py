@@ -10,6 +10,7 @@ import logging
 import subprocess
 import shutil
 import socket
+import re
 
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -44,6 +45,7 @@ terminal_guard_running = False
 vlc_controller_process = None
 direct_video_process = None
 vlc_rc_port_in_use = VLC_RC_PORT
+playlist_item_ids = []
 TERMINAL_WINDOW_CLASSES = [
     "lxterminal",
     "xfce4-terminal",
@@ -254,6 +256,7 @@ def _start_vlc_controller() -> bool:
 
 
 def _preload_playlist(video_paths):
+    global playlist_item_ids
     _send_vlc_command("stop")
     _send_vlc_command("clear")
     for path in video_paths:
@@ -261,10 +264,40 @@ def _preload_playlist(video_paths):
         time.sleep(0.03)
     _send_vlc_command("stop")
 
+    playlist_text = _send_vlc_command("playlist", timeout_seconds=1.0)
+    ids = []
+    for line in (playlist_text or "").splitlines():
+        match = re.search(r"\b-\s*(\d+)\s*-", line)
+        if match:
+            try:
+                ids.append(int(match.group(1)))
+            except Exception:
+                continue
+    playlist_item_ids = ids
+    if playlist_item_ids:
+        logger.info(f"Detected VLC playlist item IDs: {playlist_item_ids}")
+    else:
+        logger.warning("Could not parse VLC playlist item IDs; switch will use fallback path")
 
-def _switch_to_preloaded_index(index: int, name: str):
+
+def _switch_to_preloaded_index(index: int, name: str, path: str):
     hide_terminal_window_linux()
-    _send_vlc_command(f"goto {index}")
+
+    sent_goto = False
+    if playlist_item_ids and index < len(playlist_item_ids):
+        playlist_id = playlist_item_ids[index]
+        _send_vlc_command(f"goto {playlist_id}")
+        sent_goto = True
+    else:
+        reply = _send_vlc_command(f"goto {index}")
+        sent_goto = bool(reply)
+
+    if not sent_goto:
+        # Fallback if RC build rejects goto/index semantics.
+        _send_vlc_command("stop")
+        _send_vlc_command("clear")
+        _send_vlc_command(f"add {_quote_path(path)}")
+
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
     logger.info(f"Switched to: {name} (index {index})")
@@ -332,7 +365,7 @@ def main():
         while True:
             name, path = resolved_sequence[index % len(resolved_sequence)]
             if use_rc:
-                _switch_to_preloaded_index(index % len(resolved_sequence), name)
+                _switch_to_preloaded_index(index % len(resolved_sequence), name, path)
             else:
                 _play_video_direct(path, name)
             index += 1
