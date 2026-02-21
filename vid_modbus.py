@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # export XDG_SESSION_TYPE=x11
 # export QT_QPA_PLATFORM=xcb
 # python vid_modbus.py
@@ -5,149 +6,62 @@
 import os
 import sys
 import time
-import threading
+import socket
+import shutil
 import logging
 import subprocess
-import queue
-import shutil
-import socket
-import urllib.parse
 
-# Improve VLC stability on Raspberry Pi/Wayland by preferring X11-compatible backend.
+# -------------------------------
+# Environment / Logging
+# -------------------------------
 if sys.platform.startswith("linux"):
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ.setdefault("DISPLAY", ":0")
     os.environ.setdefault("XDG_SESSION_TYPE", "x11")
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    xauth = os.path.join(os.path.expanduser("~"), ".Xauthority")
+    if os.path.exists(xauth):
+        os.environ.setdefault("XAUTHORITY", xauth)
 
-# Setup logging to file and console
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_modbus.log")
 logging.basicConfig(
-    level=logging.INFO,  # Changed from DEBUG to reduce console spam
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stdout)
-    ]
+        logging.StreamHandler(sys.stdout),
+    ],
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger("vid_modbus")
 
-# Silence pymodbus debug logging in console (still logs to file)
-logging.getLogger('pymodbus').setLevel(logging.WARNING)
-
-logger.info("Modbus Video Player started")
-
-# Import Modbus TCP Client
+# -------------------------------
+# Modbus
+# -------------------------------
 try:
     from pymodbus.client import ModbusTcpClient
-    HAS_MODBUS = True
 except ImportError:
-    logger.error("pymodbus not installed! Install with: pip install pymodbus")
-    HAS_MODBUS = False
+    print("ERROR: pymodbus not installed. Install with: pip install pymodbus")
+    sys.exit(1)
 
-# Tkinter for GUI
-try:
-    import tkinter as tk
-except ImportError:
-    tk = None
+MODBUS_SERVER_IP = "192.168.1.100"
+MODBUS_SERVER_PORT = int(os.environ.get("MODBUS_SERVER_PORT", "504"))
+MODBUS_UNIT_ID = 1
+MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.1"))
+MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 
-def resolve_video_path(filename: str) -> str:
-    """Resolve video path for both Pi and Windows runtime."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        filename,
-        os.path.join(script_dir, filename),
-        os.path.join(os.getcwd(), "Videos", filename),
-        os.path.join("/home/helmwash/video_pi_zero", filename),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return filename
+# Rising-edge debounce (simple)
+COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "0.8"))
 
-
-if sys.platform.startswith("linux"):
-    # On Pi/Linux, avoid importing vid.py to prevent in-process libVLC segfaults.
-    def init_video_window():
-        # Optional only: overlay can interfere with VLC stacking on some Pi setups.
-        # Default ON to avoid desktop visibility during boot/startup.
-        if os.environ.get("VID_MODBUS_BLACK_OVERLAY", "1") != "1":
-            return None
-
-        if tk is None:
-            return None
-        try:
-            root = tk.Tk()
-            root.title("Video Background")
-            root.configure(bg="black")
-            root.minsize(1, 1)
-
-            # Force actual full-screen geometry (more reliable than fullscreen attr alone on Pi).
-            root.update_idletasks()
-            width = root.winfo_screenwidth()
-            height = root.winfo_screenheight()
-            root.geometry(f"{width}x{height}+0+0")
-
-            root.overrideredirect(True)
-            try:
-                root.attributes("-fullscreen", True)
-            except Exception:
-                pass
-
-            # Keep black background below VLC window so it doesn't overlay videos.
-            try:
-                root.attributes("-topmost", False)
-            except Exception:
-                pass
-
-            # Fill full area with explicit black frame.
-            bg = tk.Frame(root, bg="black")
-            bg.place(x=0, y=0, relwidth=1, relheight=1)
-
-            root.lift()
-            root.lower()
-            root.bind("<Escape>", lambda _e: root.destroy())
-            root.update()
-            return root
-        except Exception as exc:
-            logger.warning(f"Could not create Linux black overlay window: {exc}")
-            return None
-
-    def play_video(_):
-        return None
-else:
-    # Import VLC setup from original vid.py (Windows path)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("vid_original", os.path.join(os.path.dirname(__file__), "vid.py"))
-    if spec and spec.loader:
-        vid_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(vid_module)
-        _setup_vlc_windows = vid_module._setup_vlc_windows
-        play_video = vid_module.play_video
-        init_video_window = vid_module.init_video_window
-    else:
-        logger.error("Could not import from vid.py - copy necessary functions manually")
-        sys.exit(1)
-
-# =============================================================================
-# MODBUS CONFIGURATION
-# =============================================================================
-MODBUS_SERVER_IP = "192.168.1.100"  # Change to your Siemens LOGO! 8 IP address
-MODBUS_SERVER_PORT = int(os.environ.get("MODBUS_SERVER_PORT", "504"))  # Standard Modbus TCP port
-MODBUS_UNIT_ID = 1  # Modbus slave/unit ID (typically 1 for LOGO!)
-PI_ETH_INTERFACE = "eth0"
-PI_IP = "192.168.1.10"
-PI_IP_CIDR = f"{PI_IP}/24"
-
-# Modbus coil addresses for video triggers (0-based addressing)
-# These map to your 5 GPIO buttons
+# -------------------------------
+# Video Mapping
+# -------------------------------
 MODBUS_COILS = {
-    "Process_step_1": 0,    # Was GPIO 17
-    "Guide_steps": 1,       # Was GPIO 27
-    "Warning": 2,           # Was GPIO 22
-    "Process_step_2": 3,    # Was GPIO 4
-    "Process_step_3": 4,    # Was GPIO 18
+    "Process_step_1": 0,
+    "Guide_steps": 1,
+    "Warning": 2,
+    "Process_step_2": 3,
+    "Process_step_3": 4,
 }
 
-# Video file mappings
 VIDEO_FILES = {
     "Process_step_1": "Process_step_1.mp4",
     "Guide_steps": "Guide_steps.mp4",
@@ -156,301 +70,57 @@ VIDEO_FILES = {
     "Process_step_3": "Process_step_3.mp4",
 }
 
-# Debounce settings
-last_trigger_time = {}
-for key in MODBUS_COILS.keys():
-    last_trigger_time[key] = 0
-COOLDOWN_SECONDS = 5  # Minimum seconds between triggers
+PLAYLIST_ORDER = [
+    "Guide_steps.mp4",
+    "Process_step_1.mp4",
+    "Warning.mp4",
+    "Process_step_2.mp4",
+    "Process_step_3.mp4",
+]
 
-# Global Modbus client
-modbus_client = None
-modbus_client_lock = threading.Lock()
-modbus_running = False
+last_trigger_time = {name: 0.0 for name in VIDEO_FILES}
 
-MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.2"))
-MODBUS_READ_FAILURES_BEFORE_RECONNECT = int(os.environ.get("MODBUS_READ_FAILURES_BEFORE_RECONNECT", "4"))
-MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
-COIL_REARM_LOW_SECONDS = float(os.environ.get("COIL_REARM_LOW_SECONDS", "0.9"))
-
-# Step1 transition timing (guide -> step1) to avoid first-frame flash.
-STEP1_BLACK_PRESETTLE_SECONDS = float(os.environ.get("STEP1_BLACK_PRESETTLE_SECONDS", "0.16"))
-STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.01"))
-STEP1_BLACK_HOLD_SECONDS = float(os.environ.get("STEP1_BLACK_HOLD_SECONDS", "0.90"))
-TRANSITION_BLACK_HOLD_SECONDS = float(os.environ.get("TRANSITION_BLACK_HOLD_SECONDS", "0.45"))
-TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("TERMINAL_GUARD_INTERVAL_SECONDS", "0.05"))
-STARTUP_BLACK_HOLD_SECONDS = float(os.environ.get("STARTUP_BLACK_HOLD_SECONDS", "1.4"))
-
-# Video playback queue (serialize requests from Modbus thread)
-video_queue = queue.Queue(maxsize=20)
-video_process_lock = threading.Lock()
-guide_vlc_process = None
-trigger_vlc_process = None
-black_vlc_process = None
-USE_EXTERNAL_VLC = sys.platform.startswith("linux")
-USE_VLC_RC_CONTROL = sys.platform.startswith("linux")
-VLC_RC_HOST = "127.0.0.1"
-VLC_RC_PORT = 4213
-vlc_supervisor_running = False
-terminal_guard_running = False
-video_worker_running = False
-trigger_video_active = False
-last_requested_video = None
-idle_guide_active = False
-idle_mode_requested = False
-BLACK_IMAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_black.ppm")
+# -------------------------------
+# VLC RC
+# -------------------------------
+RC_HOST = "127.0.0.1"
+RC_PORT = int(os.environ.get("VLC_RC_PORT", "4213"))
+vlc_proc = None
+playlist_id_by_file = {}
 
 
-def _get_vlc_player_cmd():
+def resolve_video_path(filename: str) -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        filename,
+        os.path.join(script_dir, filename),
+        os.path.join(os.getcwd(), "Videos", filename),
+        os.path.join("/home/helmwash/video_pi_zero", filename),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return filename
+
+
+def get_player_cmd():
     if shutil.which("cvlc"):
-        return ["cvlc"]
+        return "cvlc"
     if shutil.which("vlc"):
-        return ["vlc", "-I", "dummy"]
+        return "vlc"
     return None
 
 
-def _vlc_fullscreen_base_args():
-    """Common VLC args for cleaner fullscreen playback."""
-    return [
-        "--fullscreen",
-        "--video-on-top",
-        "--no-video-title-show",
-        "--no-video-deco",
-        "--no-qt-fs-controller",
-        "--quiet",
-    ]
-
-
-def _force_vlc_window_fullscreen_linux(process_handle):
-    """Best-effort X11 window-manager enforcement for borderless fullscreen VLC."""
-    if not sys.platform.startswith("linux") or process_handle is None:
-        return
-
-    if shutil.which("xdotool") is None:
-        return
-
-    pid = str(process_handle.pid)
-    deadline = time.time() + 2.5
-
-    while time.time() < deadline:
-        try:
-            result = subprocess.run(
-                ["xdotool", "search", "--pid", pid],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-            if not window_ids:
-                time.sleep(0.1)
-                continue
-
-            for window_id in window_ids:
-                if shutil.which("xprop"):
-                    subprocess.run(
-                        [
-                            "xprop",
-                            "-id",
-                            window_id,
-                            "-f",
-                            "_MOTIF_WM_HINTS",
-                            "32c",
-                            "-set",
-                            "_MOTIF_WM_HINTS",
-                            "2, 0, 0, 0, 0",
-                        ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-
-                if shutil.which("wmctrl"):
-                    subprocess.run(
-                        ["wmctrl", "-i", "-r", window_id, "-b", "remove,maximized_vert,maximized_horz"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-                    subprocess.run(
-                        ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-
-                subprocess.run(["xdotool", "windowmove", window_id, "0", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                subprocess.run(["xdotool", "windowsize", window_id, "100%", "100%"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            return
-        except Exception:
-            time.sleep(0.1)
-
-
-def _raise_vlc_windows_for_pid_linux(process_handle):
-    """Lightweight best-effort raise/fullscreen for already-created VLC windows."""
-    if not sys.platform.startswith("linux") or process_handle is None:
-        return
-    if shutil.which("xdotool") is None:
-        return
-
+def rc_send(command: str, timeout: float = 0.8) -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     try:
-        result = subprocess.run(
-            ["xdotool", "search", "--pid", str(process_handle.pid)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-        for window_id in window_ids:
-            if shutil.which("wmctrl"):
-                subprocess.run(
-                    ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    except Exception:
-        return
-
-
-def _post_launch_fix_vlc_window(process_handle, delay_seconds=0.0):
-    """Run fullscreen/decorations fix asynchronously after VLC spawn."""
-    if not sys.platform.startswith("linux"):
-        return
-
-    def _delayed_fix():
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)
-        _force_vlc_window_fullscreen_linux(process_handle)
-
-    threading.Thread(target=_delayed_fix, daemon=True).start()
-
-
-def _hold_black_cover_on_top_linux(black_process_handle, hold_seconds=0.45):
-    """Keep black cover window above other VLC windows during transition warmup."""
-    if not sys.platform.startswith("linux"):
-        return
-    if black_process_handle is None:
-        return
-
-    deadline = time.time() + max(0.0, hold_seconds)
-    while time.time() < deadline:
-        try:
-            if black_process_handle.poll() is not None:
-                return
-            _raise_vlc_windows_for_pid_linux(black_process_handle)
-        except Exception:
-            return
-        time.sleep(0.05)
-
-
-def _start_black_transition_guard_linux(black_process_handle):
-    """Keep black cover and terminal-hide enforcement active until returned event is set."""
-    stop_event = threading.Event()
-    if not sys.platform.startswith("linux") or black_process_handle is None:
-        stop_event.set()
-        return stop_event
-
-    def _guard_loop():
-        next_hide_terminal_at = 0.0
-        while not stop_event.is_set():
-            try:
-                if black_process_handle.poll() is not None:
-                    return
-                _raise_vlc_windows_for_pid_linux(black_process_handle)
-                now = time.time()
-                if now >= next_hide_terminal_at:
-                    hide_terminal_window_linux()
-                    next_hide_terminal_at = now + 0.25
-            except Exception:
-                return
-            time.sleep(0.04)
-
-    threading.Thread(target=_guard_loop, daemon=True).start()
-    return stop_event
-
-
-def _prepare_transition_cover_locked():
-    """Ensure black cover is visible before any player handoff."""
-    if not sys.platform.startswith("linux"):
-        return
-    hide_terminal_window_linux()
-    _ensure_black_screen_loop_locked()
-    if black_vlc_process is not None and black_vlc_process.poll() is None:
-        _post_launch_fix_vlc_window(black_vlc_process)
-    time.sleep(0.08)
-
-
-def hide_terminal_window_linux():
-    """Best-effort minimize of active terminal window on Linux/X11."""
-    if not sys.platform.startswith("linux"):
-        return
-
-    commands = [
-        ["xdotool", "getactivewindow", "windowminimize"],
-        ["wmctrl", "-r", ":ACTIVE:", "-b", "add,hidden"],
-    ]
-    for cmd in commands:
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode == 0:
-                logger.debug(f"Minimized terminal window using: {' '.join(cmd)}")
-                return
-        except Exception:
-            continue
-
-
-def terminal_guard_loop():
-    """Continuously keep terminal hidden while app is running on Linux."""
-    global terminal_guard_running
-    if not sys.platform.startswith("linux"):
-        return
-    while terminal_guard_running:
-        hide_terminal_window_linux()
-        time.sleep(TERMINAL_GUARD_INTERVAL_SECONDS)
-
-
-def _ensure_black_image_file():
-    """Create a tiny black image used for fullscreen black background playback."""
-    if os.path.exists(BLACK_IMAGE_PATH):
-        return
-    try:
-        with open(BLACK_IMAGE_PATH, "w", encoding="ascii") as file:
-            file.write("P3\n1 1\n255\n0 0 0\n")
-    except Exception as e:
-        logger.warning(f"Could not create black image file: {e}")
-
-
-def _stop_process_locked(proc):
-    if proc is None:
-        return None
-    try:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1.0)
-    except Exception:
-        pass
-    return None
-
-
-def _send_vlc_command_locked(command):
-    """Send command to VLC RC TCP interface. Caller must hold video_process_lock."""
-    if not USE_VLC_RC_CONTROL:
-        return ""
-
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.settimeout(0.8)
-    try:
-        client.connect((VLC_RC_HOST, VLC_RC_PORT))
-        client.sendall((command + "\n").encode("utf-8", errors="ignore"))
+        s.connect((RC_HOST, RC_PORT))
+        s.sendall((command + "\n").encode("utf-8", errors="ignore"))
         chunks = []
         while True:
             try:
-                data = client.recv(4096)
+                data = s.recv(4096)
                 if not data:
                     break
                 chunks.append(data)
@@ -463,845 +133,278 @@ def _send_vlc_command_locked(command):
         return ""
     finally:
         try:
-            client.close()
+            s.close()
         except Exception:
             pass
 
 
-def _quote_vlc_path(path_value):
-    """Quote path for VLC RC commands."""
-    return path_value
-
-
-def _can_connect_vlc_rc_locked():
-    """Check RC TCP socket availability. Caller must hold video_process_lock."""
-    if not USE_VLC_RC_CONTROL:
-        return False
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.settimeout(0.45)
-    try:
-        client.connect((VLC_RC_HOST, VLC_RC_PORT))
-        return True
-    except Exception:
-        return False
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
-
-
-def _run_vlc_commands_locked(commands, delay_seconds=0.06):
-    """Run RC commands with tiny pacing to avoid command-race drops on Pi."""
-    for cmd in commands:
-        _send_vlc_command_locked(cmd)
-        time.sleep(delay_seconds)
-
-
-def _to_vlc_file_uri(path_value):
-    absolute = os.path.abspath(path_value)
-    return "file://" + urllib.parse.quote(absolute)
-
-
-def _rc_play_media_locked(video_path, loop_enabled):
-    """Play media in RC mode with fallback add syntax. Caller must hold video_process_lock."""
-    repeat_cmd = "repeat on" if loop_enabled else "repeat off"
-    normalized_path = os.path.abspath(video_path)
-
-    def _attempt_play(target_path):
-        _run_vlc_commands_locked([
-            "stop",
-            "clear",
-            repeat_cmd,
-            "loop off",
-            f"add {target_path}",
-            "seek 0",
-            "play",
-            "fullscreen on",
-        ], delay_seconds=0.08)
-
-    _attempt_play(normalized_path)
-    time.sleep(0.25)
-    if _vlc_state_locked() == "playing":
-        return True
-
-    # Fallback for environments that require URI-style add path.
-    _attempt_play(_to_vlc_file_uri(normalized_path))
-    time.sleep(0.25)
-    return _vlc_state_locked() == "playing"
-
-
-def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
-    """Wait until VLC RC TCP interface is available. Caller must hold video_process_lock."""
-    if not USE_VLC_RC_CONTROL:
-        return True
-
+def wait_for_rc(timeout_seconds: float = 8.0) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if guide_vlc_process and guide_vlc_process.poll() is not None:
+        if vlc_proc and vlc_proc.poll() is not None:
             return False
-        if _can_connect_vlc_rc_locked() or _send_vlc_command_locked("status"):
+        try:
+            s = socket.create_connection((RC_HOST, RC_PORT), timeout=0.4)
+            s.close()
             return True
-        time.sleep(0.1)
+        except Exception:
+            time.sleep(0.1)
     return False
 
 
-def _ensure_external_vlc_running_locked():
-    """Ensure persistent external VLC process is running. Caller must hold video_process_lock."""
-    player_cmd = _get_vlc_player_cmd()
-    if player_cmd is None:
-        logger.error("Neither 'cvlc' nor 'vlc' command is available")
-        print("Error: Install VLC command-line player (cvlc) on Pi.")
+def start_vlc_controller(first_video_path: str) -> bool:
+    global vlc_proc
+    player = get_player_cmd()
+    if not player:
+        log.error("VLC not found. Install VLC/cvlc.")
         return False
 
-    if not USE_VLC_RC_CONTROL:
+    if vlc_proc and vlc_proc.poll() is None:
         return True
 
-    global guide_vlc_process
-
-    # Keep one persistent VLC RC process alive for smooth in-process switching.
-    if guide_vlc_process is not None and guide_vlc_process.poll() is None:
-        if _wait_for_vlc_socket_locked(timeout_seconds=1.0):
-            return True
-        guide_vlc_process = _stop_process_locked(guide_vlc_process)
-
-    guide_path = resolve_video_path("Guide_steps.mp4")
-
-    cmd = player_cmd + _vlc_fullscreen_base_args() + [
+    cmd = [
+        player,
         "--intf", "dummy",
         "--extraintf", "rc",
-        "--rc-host", f"{VLC_RC_HOST}:{VLC_RC_PORT}",
+        "--rc-host", f"{RC_HOST}:{RC_PORT}",
         "--vout", "x11",
         "--avcodec-hw=none",
+        "--fullscreen",
+        "--video-on-top",
+        "--no-video-title-show",
+        "--no-video-deco",
+        "--no-qt-fs-controller",
+        "--quiet",
         "--no-audio",
+        first_video_path,
     ]
 
-    if os.path.exists(guide_path):
-        cmd.append(guide_path)
+    log.info("Starting VLC RC controller")
+    vlc_proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=os.environ.copy(),
+        start_new_session=True,
+    )
 
-    guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if not _wait_for_vlc_socket_locked(timeout_seconds=6.0):
-        guide_vlc_process = _stop_process_locked(guide_vlc_process)
-        logger.error("VLC RC controller did not become ready")
+    if not wait_for_rc():
+        log.error("VLC RC interface did not respond")
         return False
 
     return True
 
 
-def _stop_external_vlc_locked():
-    """Stop existing external VLC process. Caller must hold video_process_lock."""
-    global guide_vlc_process, trigger_vlc_process, black_vlc_process
-    guide_vlc_process = _stop_process_locked(guide_vlc_process)
-    if USE_VLC_RC_CONTROL:
-        trigger_vlc_process = None
-        black_vlc_process = None
-    else:
-        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
-        black_vlc_process = _stop_process_locked(black_vlc_process)
+def preload_playlist() -> bool:
+    global playlist_id_by_file
 
-
-def _ensure_black_screen_loop_locked():
-    """Ensure persistent black fullscreen process is running."""
-    if USE_VLC_RC_CONTROL:
-        return
-
-    global black_vlc_process
-
-    if black_vlc_process is not None and black_vlc_process.poll() is None:
-        return
-
-    _ensure_black_image_file()
-    if not os.path.exists(BLACK_IMAGE_PATH):
-        logger.error("Black image file is unavailable")
-        return
-
-    player_cmd = _get_vlc_player_cmd()
-    if player_cmd is None:
-        logger.error("Neither 'cvlc' nor 'vlc' command is available")
-        return
-
-    black_vlc_process = _stop_process_locked(black_vlc_process)
-    cmd = player_cmd + _vlc_fullscreen_base_args() + [
-        "--loop",
-        "--image-duration", "-1",
-        "--no-audio",
-        BLACK_IMAGE_PATH,
-    ]
-    black_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _post_launch_fix_vlc_window(black_vlc_process)
-
-
-def _play_idle_guide_locked():
-    """Play Guide_steps in loop for idle mode. Caller must hold video_process_lock."""
-    global trigger_video_active, guide_vlc_process, black_vlc_process, idle_guide_active, idle_mode_requested, last_requested_video
-    idle_mode_requested = True
-    guide_path = resolve_video_path("Guide_steps.mp4")
-    if not os.path.exists(guide_path):
-        logger.error(f"Guide video not found: {guide_path}")
-        return
-
-    # Avoid restarting VLC if idle guide is already active.
-    if (
-        (not USE_VLC_RC_CONTROL)
-        and idle_guide_active
-        and guide_vlc_process is not None
-        and guide_vlc_process.poll() is None
-    ):
-        return
-
-    if USE_VLC_RC_CONTROL:
-        if not _rc_play_media_locked(guide_path, loop_enabled=True):
-            logger.warning("Idle guide did not enter playing state, restarting VLC controller")
-            _stop_external_vlc_locked()
-            if _ensure_external_vlc_running_locked():
-                _rc_play_media_locked(guide_path, loop_enabled=True)
-    else:
-        player_cmd = _get_vlc_player_cmd()
-        if player_cmd is None:
-            logger.error("Neither 'cvlc' nor 'vlc' command is available")
-            return
-        _prepare_transition_cover_locked()
-        guide_vlc_process = _stop_process_locked(guide_vlc_process)
-        cmd = player_cmd + _vlc_fullscreen_base_args() + [
-            "--loop",
-            "--no-audio",
-            guide_path,
-        ]
-        guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _post_launch_fix_vlc_window(guide_vlc_process)
-    trigger_video_active = False
-    idle_guide_active = True
-    last_requested_video = "Guide_steps.mp4"
-    logger.info("Idle guide loop active")
-
-
-def _play_trigger_once_locked(video_file):
-    """Play requested trigger video once. Caller must hold video_process_lock."""
-    global trigger_video_active, trigger_vlc_process, guide_vlc_process, black_vlc_process, last_requested_video, idle_guide_active, idle_mode_requested
-    video_path = resolve_video_path(video_file)
-    if not os.path.exists(video_path):
-        logger.error(f"Video file not found: {video_path}")
-        print(f"Error: Video file not found: {video_path}")
-        return
-
-    is_warning_target = video_file == "Warning.mp4"
-
-    if USE_VLC_RC_CONTROL:
-        if not _rc_play_media_locked(video_path, loop_enabled=is_warning_target):
-            logger.warning(f"Trigger switch failed for {video_file}, restarting VLC and retrying")
-            _stop_external_vlc_locked()
-            if _ensure_external_vlc_running_locked():
-                _rc_play_media_locked(video_path, loop_enabled=is_warning_target)
-    else:
-        player_cmd = _get_vlc_player_cmd()
-        if player_cmd is None:
-            logger.error("Neither 'cvlc' nor 'vlc' command is available")
-            return
-
-        # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
-        guide_running_now = guide_vlc_process is not None and guide_vlc_process.poll() is None
-        is_step1_target = video_file == "Process_step_1.mp4"
-        is_guide_to_step1 = (
-            is_step1_target
-            and (idle_guide_active or guide_running_now or last_requested_video == "Guide_steps.mp4")
-        )
-        logger.info(
-            f"Transition check: target={video_file}, idle_guide_active={idle_guide_active}, "
-            f"guide_running_now={guide_running_now}, last_requested_video={last_requested_video}, "
-            f"is_step1_target={is_step1_target}, is_guide_to_step1={is_guide_to_step1}"
-        )
-        print(
-            f"[TRANSITION] target={video_file} step1={is_step1_target} "
-            f"guide_to_step1={is_guide_to_step1}"
-        )
-        idle_mode_requested = False
-
-        # Keep black cover visible before and during transition.
-        _prepare_transition_cover_locked()
-        transition_black_guard = _start_black_transition_guard_linux(black_vlc_process)
-
-        # Tear down any previous trigger process before starting the new one.
-        # This prevents stale-frame leaks (e.g., Warning loop flash) during guide -> step1 handoff.
-        if trigger_vlc_process is not None and trigger_vlc_process.poll() is None:
-            trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
-            if black_vlc_process is not None and black_vlc_process.poll() is None:
-                _raise_vlc_windows_for_pid_linux(black_vlc_process)
-            time.sleep(0.08)
-
-        if is_warning_target:
-            cmd = player_cmd + _vlc_fullscreen_base_args() + [
-                "--loop",
-                "--no-audio",
-                video_path,
-            ]
+    resolved = []
+    for name in PLAYLIST_ORDER:
+        p = resolve_video_path(name)
+        if os.path.exists(p):
+            resolved.append((name, p))
         else:
-            cmd = player_cmd + _vlc_fullscreen_base_args() + [
-                "--play-and-exit",
-                "--no-audio",
-                video_path,
-            ]
-        new_trigger = None
-        if is_step1_target:
-            logger.info("Applying step1 black-cover hold path")
-            print("[TRANSITION] Applying step1 black-cover hold path")
+            log.warning(f"Missing video: {p}")
 
-            # Keep black stably above everything before guide is torn down.
-            black_cover_snapshot = black_vlc_process
-            if black_cover_snapshot is not None and black_cover_snapshot.poll() is None:
-                _raise_vlc_windows_for_pid_linux(black_cover_snapshot)
-                threading.Thread(
-                    target=_hold_black_cover_on_top_linux,
-                    args=(black_cover_snapshot, STEP1_BLACK_HOLD_SECONDS),
-                    daemon=True,
-                ).start()
+    if not resolved:
+        log.error("No videos available for playlist")
+        return False
 
-            # Let black settle first, then stop guide, then let compositor settle again.
-            time.sleep(STEP1_BLACK_PRESETTLE_SECONDS)
-            guide_vlc_process = _stop_process_locked(guide_vlc_process)
-            idle_guide_active = False
-            time.sleep(STEP1_GUIDE_STOP_SETTLE_SECONDS)
+    rc_send("stop")
+    rc_send("clear")
+    rc_send("repeat off")
+    rc_send("loop on")
+    rc_send("random off")
 
-            new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _post_launch_fix_vlc_window(new_trigger, delay_seconds=STEP1_BLACK_HOLD_SECONDS)
-        else:
-            logger.info("Applying standard trigger transition path")
-            print("[TRANSITION] Applying standard trigger transition path")
+    first_name, first_path = resolved[0]
+    rc_send(f"add {first_path}")
+    time.sleep(0.1)
 
-            # Idle guide must not overlap with a non-step1 trigger video.
-            guide_vlc_process = _stop_process_locked(guide_vlc_process)
-            idle_guide_active = False
+    for _name, path in resolved[1:]:
+        rc_send(f"enqueue {path}")
+        time.sleep(0.05)
 
-            new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _post_launch_fix_vlc_window(new_trigger)
+    rc_send("seek 0")
+    rc_send("play")
+    rc_send("fullscreen on")
 
-        post_hold_seconds = STEP1_BLACK_HOLD_SECONDS if is_step1_target else TRANSITION_BLACK_HOLD_SECONDS
-        time.sleep(post_hold_seconds)
-        transition_black_guard.set()
-        trigger_vlc_process = new_trigger
-    trigger_video_active = True
-    idle_guide_active = False
-    last_requested_video = video_file
-    if is_warning_target:
-        logger.info(f"Rising-edge switch complete (loop mode): {video_file}")
-        print(f"Rising-edge switch complete (loop mode): {video_file}")
-    else:
-        logger.info(f"Rising-edge switch complete: {video_file}")
-        print(f"Rising-edge switch complete: {video_file}")
-
-
-def _vlc_state_locked():
-    """Read VLC state from RC interface. Caller must hold video_process_lock."""
-    if not USE_VLC_RC_CONTROL:
-        if trigger_vlc_process is not None and trigger_vlc_process.poll() is None:
-            return "playing"
-        if guide_vlc_process is not None and guide_vlc_process.poll() is None:
-            return "playing"
-        if black_vlc_process is not None and black_vlc_process.poll() is None:
-            return "playing"
-        if trigger_vlc_process is None and guide_vlc_process is None:
-            return "stopped"
-        return "stopped"
-
-    status = _send_vlc_command_locked("status")
-    lowered = status.lower()
-    if "state playing" in lowered:
-        return "playing"
-    if "state paused" in lowered:
-        return "paused"
-    if "state stopped" in lowered:
-        return "stopped"
-    return "unknown"
-
-
-def vlc_supervisor_loop():
-    """Keep VLC alive and ensure guide loops during idle."""
-    global vlc_supervisor_running, trigger_video_active, idle_guide_active, trigger_vlc_process
-    logger.info("VLC supervisor started")
-    while vlc_supervisor_running:
-        if not USE_EXTERNAL_VLC:
-            time.sleep(0.5)
+    # Build ID map for direct goto by filename when available.
+    text = rc_send("playlist", timeout=1.2)
+    id_map = {}
+    for line in text.splitlines():
+        low = line.lower()
+        # line format usually contains "- <id> -"
+        parts = line.split("-")
+        if len(parts) < 2:
             continue
-
+        maybe_id = parts[1].strip() if parts[0].strip() == "" else parts[0].strip()
         try:
-            with video_process_lock:
-                if not _ensure_external_vlc_running_locked():
-                    time.sleep(0.6)
-                    continue
-
-                # In non-RC mode, detect trigger completion by trigger process exit.
-                if (not USE_VLC_RC_CONTROL) and trigger_video_active:
-                    if trigger_vlc_process is None or trigger_vlc_process.poll() is not None:
-                        trigger_video_active = False
-                        idle_guide_active = False
-                        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
-
-                state = _vlc_state_locked()
-                # If a trigger finished (stopped), immediately return to looping guide.
-                if trigger_video_active and state == "stopped":
-                    if idle_mode_requested:
-                        _play_idle_guide_locked()
-                    else:
-                        _ensure_black_screen_loop_locked()
-                # Ensure idle guide is always active when nothing is playing.
-                elif (not trigger_video_active) and state == "stopped":
-                    if idle_mode_requested:
-                        _play_idle_guide_locked()
-                    else:
-                        _ensure_black_screen_loop_locked()
-                # Unknown often means RC transient; make sure something is still visible.
-                elif state == "unknown" and not trigger_video_active:
-                    if idle_mode_requested:
-                        _play_idle_guide_locked()
-                    else:
-                        _ensure_black_screen_loop_locked()
-
-                # Keep black background persistent when guide mode is not requested.
-                if (not trigger_video_active) and (not idle_mode_requested):
-                    _ensure_black_screen_loop_locked()
-        except Exception as e:
-            logger.warning(f"VLC supervisor warning: {e}")
-
-        time.sleep(0.1)
-
-
-def play_video_safe(video_file):
-    """Play video robustly; Linux uses external VLC process to avoid libVLC segfaults."""
-    if not USE_EXTERNAL_VLC:
-        play_video(video_file)
-        return
-
-    with video_process_lock:
-        if not _ensure_external_vlc_running_locked():
-            return
-        if video_file == "Guide_steps.mp4":
-            _play_idle_guide_locked()
-        else:
-            _play_trigger_once_locked(video_file)
-
-
-def queue_video_play(video_file):
-    """Queue a video request; keep latest requests flowing without blocking."""
-    try:
-        video_queue.put_nowait(video_file)
-    except queue.Full:
-        try:
-            video_queue.get_nowait()  # drop oldest
-            video_queue.put_nowait(video_file)
+            item_id = int(maybe_id)
         except Exception:
-            logger.warning("Video queue full; dropping request")
-
-
-def video_playback_worker():
-    """Single worker that executes play_video to avoid concurrent VLC switches."""
-    global video_worker_running
-    logger.info("Video playback worker started")
-    while video_worker_running:
-        video_file = None
-        try:
-            video_file = video_queue.get(timeout=0.3)
-            play_video_safe(video_file)
-        except queue.Empty:
             continue
-        except Exception as e:
-            logger.error(f"Video playback worker error: {e}")
-        finally:
-            if video_file is not None:
-                video_queue.task_done()
+        for fname, _ in resolved:
+            if fname.lower() in low and fname not in id_map:
+                id_map[fname] = item_id
 
-# =============================================================================
-# MODBUS FUNCTIONS
-# =============================================================================
-
-def connect_modbus():
-    """Connect to the Siemens LOGO! 8 PLC via Modbus TCP"""
-    global modbus_client
-    try:
-        # Ensure Pi Ethernet IP is configured before Modbus TCP connect
-        if not ensure_pi_ip_for_modbus():
-            logger.error("Required Pi Ethernet IP is not configured")
-            return False
-
-        with modbus_client_lock:
-            if modbus_client:
-                try:
-                    modbus_client.close()
-                except Exception:
-                    pass
-
-            logger.info(f"Connecting to Modbus server at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-            modbus_client = ModbusTcpClient(
-                MODBUS_SERVER_IP,
-                port=MODBUS_SERVER_PORT,
-                timeout=2,
-            )
-
-            if modbus_client.connect():
-                logger.info("Successfully connected to Modbus server")
-                return True
-
-        logger.error("Failed to connect to Modbus server")
-        return False
-    except Exception as e:
-        logger.error(f"Modbus connection error: {e}")
-        return False
-
-
-def _read_coils_with_unit_id(client, start_addr, count):
-    """Read coils while handling pymodbus API differences for unit/slave/device_id."""
-    try:
-        return client.read_coils(start_addr, count=count, device_id=MODBUS_UNIT_ID)
-    except TypeError:
-        try:
-            return client.read_coils(start_addr, count=count, slave=MODBUS_UNIT_ID)
-        except TypeError:
-            return client.read_coils(start_addr, count=count, unit=MODBUS_UNIT_ID)
-
-
-def _interface_has_ip(interface_name, ip_address):
-    """Return True if interface already has the target IPv4 address."""
-    try:
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show", "dev", interface_name],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return False
-        return ip_address in result.stdout
-    except Exception:
-        return False
-
-
-def ensure_pi_ip_for_modbus():
-    """Ensure eth0 has 192.168.1.10/24 before trying Modbus connection."""
-    if not sys.platform.startswith("linux"):
-        logger.info("Skipping IP setup (non-Linux platform)")
-        return True
-
-    if _interface_has_ip(PI_ETH_INTERFACE, PI_IP):
-        logger.info(f"{PI_ETH_INTERFACE} already has {PI_IP_CIDR}")
-        print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
-        return True
-
-    print(f"Configuring network: assigning {PI_IP_CIDR} to {PI_ETH_INTERFACE}...")
-    logger.info(f"Assigning {PI_IP_CIDR} to {PI_ETH_INTERFACE}")
-
-    commands = [
-        ["ip", "addr", "add", PI_IP_CIDR, "dev", PI_ETH_INTERFACE],
-        ["sudo", "-n", "ip", "addr", "add", PI_IP_CIDR, "dev", PI_ETH_INTERFACE],
-    ]
-
-    for cmd in commands:
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            output = (result.stdout or "") + (result.stderr or "")
-
-            if result.returncode == 0:
-                logger.info(f"IP assignment successful using: {' '.join(cmd)}")
-                print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
-                return True
-
-            if "Address already assigned" in output:
-                logger.info(f"IP already assigned on {PI_ETH_INTERFACE}")
-                print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
-                return True
-
-        except FileNotFoundError:
-            logger.warning(f"Command not found: {' '.join(cmd)}")
-            continue
-        except Exception as exc:
-            logger.warning(f"Error running {' '.join(cmd)}: {exc}")
-
-    # Final verification after command attempts
-    if _interface_has_ip(PI_ETH_INTERFACE, PI_IP):
-        print(f"✓ Network ready: {PI_ETH_INTERFACE} has {PI_IP_CIDR}")
-        return True
-
-    print("\nCould not auto-configure Pi Ethernet IP for Modbus.")
-    print(f"Run this once before starting: sudo ip addr add {PI_IP_CIDR} dev {PI_ETH_INTERFACE}")
-    print("If it says 'Address already assigned', that is OK.")
-    return False
-
-
-def read_modbus_coils():
-    """Read all configured coils from the PLC and return their states"""
-    global modbus_client
-    with modbus_client_lock:
-        client = modbus_client
-
-    if not client:
-        logger.warning("Modbus client not connected")
-        return None
-    
-    try:
-        # Read 5 coils starting from address 0
-        result = _read_coils_with_unit_id(client, 0, 5)
-        
-        if result.isError():
-            logger.error(f"Error reading coils: {result}")
-            return None
-        
-        return result.bits[:5]  # Return first 5 coil states
-    
-    except Exception as e:
-        logger.error(f"Exception reading Modbus coils: {e}")
-        with modbus_client_lock:
-            if modbus_client:
-                try:
-                    modbus_client.close()
-                except Exception:
-                    pass
-                modbus_client = None
-        return None
-
-
-def can_trigger_action(action_name):
-    """Check if enough time has passed since last trigger (debounce)"""
-    current_time = time.time()
-    time_since_last = current_time - last_trigger_time[action_name]
-    
-    if time_since_last < COOLDOWN_SECONDS:
-        return False
-    
-    last_trigger_time[action_name] = current_time
+    playlist_id_by_file = id_map
+    log.info(f"Playlist preloaded. IDs: {playlist_id_by_file}")
+    log.info(f"Started: {first_name}")
     return True
 
 
-def handle_modbus_trigger(action_name):
-    """Handle a Modbus trigger by playing the appropriate video"""
-    if can_trigger_action(action_name):
-        video_file = VIDEO_FILES[action_name]
+def switch_video(video_file: str):
+    path = resolve_video_path(video_file)
+    if not os.path.exists(path):
+        log.warning(f"Missing target video: {path}")
+        return
 
-        # Ignore duplicate trigger for the same video while it is already active.
-        with video_process_lock:
-            duplicate_active_trigger = (
-                trigger_video_active
-                and last_requested_video == video_file
-            )
-        if duplicate_active_trigger:
-            logger.info(f"Ignoring duplicate active trigger: {action_name} -> {video_file}")
-            print(f"  -> Ignored duplicate trigger (already active): {video_file}")
-            return
-
-        logger.info(f"Modbus trigger queued: {action_name} -> {video_file}")
-        print(f"  -> Queued video: {video_file}")
-        queue_video_play(video_file)
+    # Warning loops; others play once.
+    if video_file == "Warning.mp4":
+        rc_send("repeat on")
     else:
-        logger.debug(f"Trigger for {action_name} ignored (cooldown active)")
-        print(f"  -> Trigger ignored (cooldown: {COOLDOWN_SECONDS}s)")
+        rc_send("repeat off")
+
+    if video_file in playlist_id_by_file:
+        rc_send(f"goto {playlist_id_by_file[video_file]}")
+        rc_send("seek 0")
+        rc_send("play")
+        rc_send("fullscreen on")
+    else:
+        # Fallback if playlist ID was not detected
+        rc_send("stop")
+        rc_send("clear")
+        rc_send(f"add {path}")
+        rc_send("seek 0")
+        rc_send("play")
+        rc_send("fullscreen on")
+
+    log.info(f"Switched to: {video_file}")
 
 
-def modbus_polling_loop():
-    """Main loop that polls Modbus coils and triggers videos"""
-    global modbus_running
-    logger.info("Starting Modbus polling loop")
-    print("[Modbus Monitor] Polling started - rising edge only mode.\n")
-    
-    # Track last state of each coil to detect rising edge (0 -> 1 transition)
-    last_coil_states = [False] * 5
-    low_since_times = [time.time()] * 5
-    consecutive_read_failures = 0
+# -------------------------------
+# Modbus Helpers
+# -------------------------------
+modbus_client = None
 
-    while modbus_running:
+
+def connect_modbus() -> bool:
+    global modbus_client
+    try:
+        if modbus_client:
+            try:
+                modbus_client.close()
+            except Exception:
+                pass
+
+        modbus_client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT, timeout=2)
+        ok = modbus_client.connect()
+        if ok:
+            log.info(f"Connected to Modbus: {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
+            return True
+        log.error("Modbus connect failed")
+        return False
+    except Exception as e:
+        log.error(f"Modbus connect error: {e}")
+        return False
+
+
+def read_coils() -> list | None:
+    if not modbus_client:
+        return None
+    try:
         try:
-            # Read current coil states
-            coil_states = read_modbus_coils()
-            
-            if coil_states is None:
-                consecutive_read_failures += 1
-                if consecutive_read_failures >= MODBUS_READ_FAILURES_BEFORE_RECONNECT:
-                    logger.warning(
-                        f"Modbus read failed {consecutive_read_failures} times; reconnecting..."
-                    )
-                    time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
-                    if connect_modbus():
-                        last_coil_states = [False] * 5
-                        consecutive_read_failures = 0
-                        hide_terminal_window_linux()
-                    else:
-                        time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
-                else:
-                    time.sleep(MODBUS_POLL_INTERVAL_SECONDS)
+            result = modbus_client.read_coils(0, count=5, device_id=MODBUS_UNIT_ID)
+        except TypeError:
+            try:
+                result = modbus_client.read_coils(0, count=5, slave=MODBUS_UNIT_ID)
+            except TypeError:
+                result = modbus_client.read_coils(0, count=5, unit=MODBUS_UNIT_ID)
+
+        if result.isError():
+            return None
+        return result.bits[:5]
+    except Exception:
+        return None
+
+
+def can_trigger(action_name: str) -> bool:
+    now = time.time()
+    if now - last_trigger_time[action_name] < COOLDOWN_SECONDS:
+        return False
+    last_trigger_time[action_name] = now
+    return True
+
+
+# -------------------------------
+# Main
+# -------------------------------
+def main():
+    print("=" * 60)
+    print("Simple Modbus Video Trigger (merged vid_test + modbus)")
+    print("=" * 60)
+
+    # Start VLC RC + preload playlist
+    first_path = resolve_video_path(PLAYLIST_ORDER[0])
+    if not os.path.exists(first_path):
+        log.error(f"First video missing: {first_path}")
+        return
+
+    if not start_vlc_controller(first_path):
+        return
+
+    if not preload_playlist():
+        return
+
+    # Start idle on guide
+    switch_video("Guide_steps.mp4")
+
+    # Connect Modbus
+    if not connect_modbus():
+        print("Could not connect to Modbus PLC")
+        return
+
+    print("Monitoring coils 0-4 (rising edge only)... Ctrl+C to exit")
+    last_states = [False] * 5
+
+    try:
+        while True:
+            states = read_coils()
+            if states is None:
+                log.warning("Read failed, reconnecting Modbus...")
+                time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                connect_modbus()
+                time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
                 continue
 
-            consecutive_read_failures = 0
-            
-            # Check each coil for rising edge (transition from False to True)
             for idx, (action_name, coil_addr) in enumerate(MODBUS_COILS.items()):
-                current_state = coil_states[idx]
-                previous_state = last_coil_states[idx]
-                
-                # Trigger on rising edge (0 -> 1)
-                if current_state and not previous_state:
-                    low_duration = time.time() - low_since_times[idx]
-                    if low_duration >= COIL_REARM_LOW_SECONDS:
-                        logger.info(f"Rising edge detected on coil {coil_addr} ({action_name})")
-                        print(f"[Coil {coil_addr}] State changed: OFF -> ON ({action_name})")
-                        handle_modbus_trigger(action_name)
-                    else:
-                        logger.info(
-                            f"Ignored short re-arm on coil {coil_addr} ({action_name}); "
-                            f"low_duration={low_duration:.3f}s"
-                        )
-                # Falling edge is ignored for switching (rising edge only mode).
-                elif not current_state and previous_state:
-                    logger.debug(f"Falling edge observed on coil {coil_addr} ({action_name})")
-                    low_since_times[idx] = time.time()
-                
-                # Update last state
-                last_coil_states[idx] = current_state
-            
+                current = bool(states[idx])
+                previous = bool(last_states[idx])
+
+                # Rising edge only
+                if current and not previous:
+                    if can_trigger(action_name):
+                        target = VIDEO_FILES[action_name]
+                        log.info(f"Rising edge coil {coil_addr} -> {action_name} -> {target}")
+                        switch_video(target)
+
+                last_states[idx] = current
+
             time.sleep(MODBUS_POLL_INTERVAL_SECONDS)
-            
-        except KeyboardInterrupt:
-            logger.info("Modbus polling interrupted by user")
-            break
-        except Exception as e:
-            logger.error(f"Error in Modbus polling loop: {e}")
-            time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
-    
-    # Cleanup
-    with modbus_client_lock:
-        if modbus_client:
-            modbus_client.close()
-            logger.info("Modbus connection closed")
 
-
-# =============================================================================
-# MAIN FUNCTION
-# =============================================================================
-
-def main():
-    global vlc_supervisor_running, idle_mode_requested, modbus_running, video_worker_running, terminal_guard_running
-    logger.info("=== Modbus Video Player Startup ===")
-    logger.info(f"Modbus Server: {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-    logger.info(f"Configured coils: {MODBUS_COILS}")
-    
-    if not HAS_MODBUS:
-        logger.error("Cannot run without pymodbus. Install it with: pip install pymodbus")
-        print("\nERROR: pymodbus not installed!")
-        print("Install it with: pip install pymodbus")
-        return
-
-    # Create GUI window early so desktop is covered during startup/reboot launch.
-    root = init_video_window()
-
-    # Hide terminal and start guard as early as possible.
-    hide_terminal_window_linux()
-    terminal_guard_running = True
-    terminal_guard_thread = threading.Thread(target=terminal_guard_loop, daemon=True)
-    terminal_guard_thread.start()
-
-    # Bring up black visual cover immediately on Linux to mask startup gaps.
-    if USE_EXTERNAL_VLC:
-        with video_process_lock:
-            _ensure_black_screen_loop_locked()
-            if black_vlc_process is not None and black_vlc_process.poll() is None:
-                _hold_black_cover_on_top_linux(black_vlc_process, STARTUP_BLACK_HOLD_SECONDS)
-
-    # Ensure Pi Ethernet IP is configured before Modbus TCP connect
-    if not ensure_pi_ip_for_modbus():
-        logger.error("Required Pi Ethernet IP is not configured")
-        return
-    
-    # Connect to Modbus server
-    print("=" * 60)
-    print(f"Connecting to Modbus PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}...")
-    print("=" * 60)
-    
-    if not connect_modbus():
-        logger.error("Failed to establish initial Modbus connection")
-        print("\n" + "=" * 60)
-        print("ERROR: MODBUS CONNECTION FAILED")
-        print("=" * 60)
-        print(f"Could not connect to {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-        print("\nPlease check:")
-        print("  1. PLC is powered on")
-        print("  2. Ethernet cable is connected")
-        print("  3. Pi has IP 192.168.1.10 (run: ip -4 addr show dev eth0)")
-        print("  4. PLC IP is correct: 192.168.1.100")
-        print("  5. Modbus TCP is enabled on the LOGO! 8")
-        print("=" * 60)
-        return
-    
-    # Connection successful
-    print("\n" + "=" * 60)
-    print("✓ MODBUS CONNECTION SUCCESSFUL!")
-    print("=" * 60)
-    print(f"Connected to PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-    print("Monitoring coils 0-4 for state changes...")
-    print("=" * 60 + "\n")
-
-    # Hide terminal window to avoid visible desktop/terminal flashes during video switches.
-    hide_terminal_window_linux()
-
-    # Start playback worker thread (serializes all play requests)
-    video_worker_running = True
-    playback_thread = threading.Thread(target=video_playback_worker, daemon=True)
-    playback_thread.start()
-
-    # Keep persistent VLC alive and force idle guide loop when no trigger video is active
-    if USE_EXTERNAL_VLC:
-        vlc_supervisor_running = True
-        supervisor_thread = threading.Thread(target=vlc_supervisor_loop, daemon=True)
-        supervisor_thread.start()
-
-    # Start with guide video in idle mode on launch
-    logger.info("Starting with guide idle video")
-    with video_process_lock:
-        idle_mode_requested = True
-        _play_idle_guide_locked()
-    
-    # Start Modbus polling in background thread
-    modbus_running = True
-    modbus_thread = threading.Thread(target=modbus_polling_loop, daemon=True)
-    modbus_thread.start()
-    logger.info("Modbus polling thread started")
-    
-    # Run GUI main loop (if available)
-    if root is not None:
-        logger.info("Starting GUI main loop")
+    except KeyboardInterrupt:
+        log.info("Interrupted by user")
+    finally:
         try:
-            root.mainloop()
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
-    else:
-        # No GUI - just wait for Modbus triggers
-        logger.info("Running without GUI (console mode)")
-        print("Press Ctrl+C to exit")
+            if modbus_client:
+                modbus_client.close()
+        except Exception:
+            pass
         try:
-            modbus_thread.join()
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
-    
-    # Cleanup
-    modbus_running = False
-    video_worker_running = False
-    vlc_supervisor_running = False
-    terminal_guard_running = False
-
-    try:
-        modbus_thread.join(timeout=2)
-    except Exception:
-        pass
-    try:
-        playback_thread.join(timeout=2)
-    except Exception:
-        pass
-    try:
-        terminal_guard_thread.join(timeout=1)
-    except Exception:
-        pass
-
-    if USE_EXTERNAL_VLC:
-        with video_process_lock:
-            _stop_external_vlc_locked()
-
-    with modbus_client_lock:
-        if modbus_client:
-            modbus_client.close()
-    logger.info("Application shutdown complete")
+            if vlc_proc and vlc_proc.poll() is None:
+                vlc_proc.terminate()
+        except Exception:
+            pass
+        log.info("Shutdown complete")
 
 
 if __name__ == "__main__":
