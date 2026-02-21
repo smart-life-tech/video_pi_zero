@@ -166,7 +166,7 @@ def build_playlist(video_paths):
     rc("stop")
     rc("clear")
     rc("repeat off")
-    rc("loop on")
+    rc("loop off")
     rc("random off")
 
     rc(f"add {video_paths[0]}")
@@ -185,8 +185,8 @@ def switch_to_video(video_file: str):
     if idx is None:
         return
 
-    # Loop warning until another trigger arrives
-    if video_file == "Warning.mp4":
+    # Loop guide/warning until another trigger arrives
+    if video_file in ("Guide_steps.mp4", "Warning.mp4"):
         rc("repeat on")
     else:
         rc("repeat off")
