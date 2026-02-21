@@ -67,7 +67,8 @@ if sys.platform.startswith("linux"):
     # On Pi/Linux, avoid importing vid.py to prevent in-process libVLC segfaults.
     def init_video_window():
         # Optional only: overlay can interfere with VLC stacking on some Pi setups.
-        if os.environ.get("VID_MODBUS_BLACK_OVERLAY", "0") != "1":
+        # Default ON to avoid desktop visibility during boot/startup.
+        if os.environ.get("VID_MODBUS_BLACK_OVERLAY", "1") != "1":
             return None
 
         if tk is None:
@@ -175,6 +176,8 @@ STEP1_BLACK_PRESETTLE_SECONDS = float(os.environ.get("STEP1_BLACK_PRESETTLE_SECO
 STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.01"))
 STEP1_BLACK_HOLD_SECONDS = float(os.environ.get("STEP1_BLACK_HOLD_SECONDS", "0.90"))
 TRANSITION_BLACK_HOLD_SECONDS = float(os.environ.get("TRANSITION_BLACK_HOLD_SECONDS", "0.45"))
+TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("TERMINAL_GUARD_INTERVAL_SECONDS", "0.05"))
+STARTUP_BLACK_HOLD_SECONDS = float(os.environ.get("STARTUP_BLACK_HOLD_SECONDS", "1.4"))
 
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
@@ -187,6 +190,7 @@ USE_VLC_RC_CONTROL = False
 VLC_RC_HOST = "127.0.0.1"
 VLC_RC_PORT = 4213
 vlc_supervisor_running = False
+terminal_guard_running = False
 video_worker_running = False
 trigger_video_active = False
 last_requested_video = None
@@ -389,10 +393,20 @@ def hide_terminal_window_linux():
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if result.returncode == 0:
-                logger.info(f"Minimized terminal window using: {' '.join(cmd)}")
+                logger.debug(f"Minimized terminal window using: {' '.join(cmd)}")
                 return
         except Exception:
             continue
+
+
+def terminal_guard_loop():
+    """Continuously keep terminal hidden while app is running on Linux."""
+    global terminal_guard_running
+    if not sys.platform.startswith("linux"):
+        return
+    while terminal_guard_running:
+        hide_terminal_window_linux()
+        time.sleep(TERMINAL_GUARD_INTERVAL_SECONDS)
 
 
 def _ensure_black_image_file():
@@ -1105,7 +1119,7 @@ def modbus_polling_loop():
 # =============================================================================
 
 def main():
-    global vlc_supervisor_running, idle_mode_requested, modbus_running, video_worker_running
+    global vlc_supervisor_running, idle_mode_requested, modbus_running, video_worker_running, terminal_guard_running
     logger.info("=== Modbus Video Player Startup ===")
     logger.info(f"Modbus Server: {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
     logger.info(f"Configured coils: {MODBUS_COILS}")
@@ -1115,6 +1129,22 @@ def main():
         print("\nERROR: pymodbus not installed!")
         print("Install it with: pip install pymodbus")
         return
+
+    # Create GUI window early so desktop is covered during startup/reboot launch.
+    root = init_video_window()
+
+    # Hide terminal and start guard as early as possible.
+    hide_terminal_window_linux()
+    terminal_guard_running = True
+    terminal_guard_thread = threading.Thread(target=terminal_guard_loop, daemon=True)
+    terminal_guard_thread.start()
+
+    # Bring up black visual cover immediately on Linux to mask startup gaps.
+    if USE_EXTERNAL_VLC:
+        with video_process_lock:
+            _ensure_black_screen_loop_locked()
+            if black_vlc_process is not None and black_vlc_process.poll() is None:
+                _hold_black_cover_on_top_linux(black_vlc_process, STARTUP_BLACK_HOLD_SECONDS)
 
     # Ensure Pi Ethernet IP is configured before Modbus TCP connect
     if not ensure_pi_ip_for_modbus():
@@ -1151,9 +1181,6 @@ def main():
 
     # Hide terminal window to avoid visible desktop/terminal flashes during video switches.
     hide_terminal_window_linux()
-    
-    # Create GUI window (black fullscreen on Pi, embedded on Windows)
-    root = init_video_window()
 
     # Start playback worker thread (serializes all play requests)
     video_worker_running = True
@@ -1198,6 +1225,7 @@ def main():
     modbus_running = False
     video_worker_running = False
     vlc_supervisor_running = False
+    terminal_guard_running = False
 
     try:
         modbus_thread.join(timeout=2)
@@ -1205,6 +1233,10 @@ def main():
         pass
     try:
         playback_thread.join(timeout=2)
+    except Exception:
+        pass
+    try:
+        terminal_guard_thread.join(timeout=1)
     except Exception:
         pass
 
