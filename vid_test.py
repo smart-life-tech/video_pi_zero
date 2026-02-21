@@ -38,9 +38,11 @@ SWITCH_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_INTERVAL_SECONDS", "5")
 TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_TERMINAL_GUARD_SECONDS", "0.08"))
 VLC_RC_HOST = os.environ.get("VID_TEST_VLC_RC_HOST", "127.0.0.1")
 VLC_RC_PORT = int(os.environ.get("VID_TEST_VLC_RC_PORT", "4215"))
+VLC_RC_PORT_FALLBACK_COUNT = int(os.environ.get("VID_TEST_VLC_RC_PORT_FALLBACK_COUNT", "4"))
 
 terminal_guard_running = False
 vlc_controller_process = None
+vlc_rc_port_in_use = VLC_RC_PORT
 TERMINAL_WINDOW_CLASSES = [
     "lxterminal",
     "xfce4-terminal",
@@ -135,7 +137,7 @@ def _send_vlc_command(command: str, timeout_seconds: float = 0.35) -> str:
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.settimeout(timeout_seconds)
     try:
-        client.connect((VLC_RC_HOST, VLC_RC_PORT))
+        client.connect((VLC_RC_HOST, vlc_rc_port_in_use))
         client.sendall((command + "\n").encode("utf-8", errors="ignore"))
         chunks = []
         while True:
@@ -173,15 +175,8 @@ def _quote_path(path_value: str) -> str:
     return '"' + path_value.replace('"', '\\"') + '"'
 
 
-def _start_vlc_controller() -> bool:
-    global vlc_controller_process
-    player_cmd = _get_vlc_player_cmd()
-    if player_cmd is None:
-        logger.error("Neither 'cvlc' nor 'vlc' command is available")
-        return False
-
-    vlc_controller_process = _stop_process(vlc_controller_process)
-    cmd = player_cmd + [
+def _build_vlc_rc_commands(player_cmd, rc_port):
+    common_video_args = [
         "--fullscreen",
         "--video-on-top",
         "--no-video-title-show",
@@ -189,11 +184,56 @@ def _start_vlc_controller() -> bool:
         "--no-qt-fs-controller",
         "--quiet",
         "--no-audio",
-        "--extraintf", "rc",
-        "--rc-host", f"{VLC_RC_HOST}:{VLC_RC_PORT}",
     ]
-    vlc_controller_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return _wait_for_vlc_rc()
+
+    commands = []
+    commands.append(
+        player_cmd
+        + common_video_args
+        + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}"]
+    )
+
+    base_exec = player_cmd[0]
+    commands.append(
+        [base_exec, "-I", "rc"]
+        + common_video_args
+        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}"]
+    )
+
+    commands.append(
+        [base_exec, "-I", "rc"]
+        + common_video_args
+        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", "--rc-fake-tty"]
+    )
+
+    return commands
+
+
+def _start_vlc_controller() -> bool:
+    global vlc_controller_process, vlc_rc_port_in_use
+    player_cmd = _get_vlc_player_cmd()
+    if player_cmd is None:
+        logger.error("Neither 'cvlc' nor 'vlc' command is available")
+        return False
+
+    vlc_controller_process = _stop_process(vlc_controller_process)
+
+    port_candidates = [VLC_RC_PORT + i for i in range(max(1, VLC_RC_PORT_FALLBACK_COUNT))]
+
+    for rc_port in port_candidates:
+        candidate_cmds = _build_vlc_rc_commands(player_cmd, rc_port)
+        for cmd in candidate_cmds:
+            logger.info(f"Trying VLC RC startup on {VLC_RC_HOST}:{rc_port} with cmd: {' '.join(cmd)}")
+            vlc_controller_process = _stop_process(vlc_controller_process)
+            vlc_controller_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            vlc_rc_port_in_use = rc_port
+            if _wait_for_vlc_rc():
+                logger.info(f"VLC RC controller started on {VLC_RC_HOST}:{vlc_rc_port_in_use}")
+                return True
+
+    vlc_controller_process = _stop_process(vlc_controller_process)
+    logger.error("VLC RC startup failed for all command/port candidates")
+    return False
 
 
 def _preload_playlist(video_paths):
