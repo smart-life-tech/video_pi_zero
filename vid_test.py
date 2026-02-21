@@ -74,10 +74,11 @@ def resolve_video_path(filename: str) -> str:
 
 
 def _get_vlc_player_cmd():
+    # Prefer full VLC binary for reliable window/video output.
+    if shutil.which("vlc"):
+        return ["vlc"]
     if shutil.which("cvlc"):
         return ["cvlc"]
-    if shutil.which("vlc"):
-        return ["vlc", "-I", "dummy"]
     return None
 
 
@@ -117,6 +118,34 @@ def hide_terminal_window_linux():
             window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
             for window_id in window_ids:
                 subprocess.run(["xdotool", "windowminimize", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            continue
+
+
+def _raise_vlc_windows_linux():
+    if not sys.platform.startswith("linux"):
+        return
+    if shutil.which("xdotool") is None:
+        return
+
+    for token_type, token_value in (("--class", "vlc"), ("--name", "VLC media player")):
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--onlyvisible", token_type, token_value],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                if shutil.which("wmctrl"):
+                    subprocess.run(
+                        ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
         except Exception:
             continue
 
@@ -324,6 +353,7 @@ def _switch_to_preloaded_index(name: str) -> bool:
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
     _send_vlc_command("fullscreen on")
+    _raise_vlc_windows_linux()
     current_playlist_index += 1
     logger.info(f"Switched to: {name}")
     return True
@@ -369,6 +399,7 @@ def main():
         _send_vlc_command("seek 0")
         _send_vlc_command("play")
         _send_vlc_command("fullscreen on")
+        _raise_vlc_windows_linux()
         logger.info(f"Started initial video: {first_name}")
 
         index = 1
