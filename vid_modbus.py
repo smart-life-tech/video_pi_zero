@@ -76,6 +76,10 @@ MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.1
 MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 TRIGGER_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "0.8"))
 
+ETH_INTERFACE = os.environ.get("ETH_INTERFACE", "eth0")
+PI_STATIC_IP_CIDR = os.environ.get("PI_STATIC_IP_CIDR", "192.168.1.10/24")
+PLC_PING_IP = os.environ.get("PLC_PING_IP", "192.168.1.100")
+
 RC_HOST = "127.0.0.1"
 RC_PORT = int(os.environ.get("VLC_RC_PORT", "4213"))
 
@@ -224,6 +228,72 @@ def connect_modbus() -> bool:
         return False
 
 
+def ensure_network_ready() -> bool:
+    """Apply required Ethernet setup and verify PLC reachability."""
+    if not sys.platform.startswith("linux"):
+        return True
+
+    commands = [
+        ["ip", "addr", "add", PI_STATIC_IP_CIDR, "dev", ETH_INTERFACE],
+        ["sudo", "-n", "ip", "addr", "add", PI_STATIC_IP_CIDR, "dev", ETH_INTERFACE],
+    ]
+
+    addr_ok = False
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            output = ((result.stdout or "") + (result.stderr or "")).lower()
+            if result.returncode == 0 or "file exists" in output or "address already assigned" in output:
+                addr_ok = True
+                break
+        except Exception:
+            continue
+
+    if not addr_ok:
+        log.error(f"Failed to apply IP {PI_STATIC_IP_CIDR} on {ETH_INTERFACE}")
+        return False
+
+    link_ok = False
+    link_cmds = [
+        ["ip", "link", "set", ETH_INTERFACE, "up"],
+        ["sudo", "-n", "ip", "link", "set", ETH_INTERFACE, "up"],
+    ]
+    for cmd in link_cmds:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                link_ok = True
+                break
+        except Exception:
+            continue
+
+    if not link_ok:
+        log.error(f"Failed to bring interface up: {ETH_INTERFACE}")
+        return False
+
+    # Required command equivalent: ping 192.168.1.100
+    ping_ok = False
+    ping_cmds = [
+        ["ping", "-c", "1", PLC_PING_IP],
+        ["ping", "-c", "3", PLC_PING_IP],
+    ]
+    for cmd in ping_cmds:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                ping_ok = True
+                break
+        except Exception:
+            continue
+
+    if not ping_ok:
+        log.warning(f"Ping failed to PLC {PLC_PING_IP}; continuing to Modbus connect attempt")
+    else:
+        log.info(f"Network ready on {ETH_INTERFACE}: {PI_STATIC_IP_CIDR}, PLC ping OK ({PLC_PING_IP})")
+
+    return True
+
+
 def read_coils():
     if not modbus_client:
         return None
@@ -267,6 +337,10 @@ def main():
 
     # Start on guide
     switch_to_video("Guide_steps.mp4")
+
+    if not ensure_network_ready():
+        print("Could not configure Ethernet network for PLC")
+        return
 
     if not connect_modbus():
         print("Could not connect to Modbus PLC")
