@@ -214,6 +214,40 @@ def verify_x11_access() -> bool:
     return False
 
 
+def force_vlc_window_visible(attempts: int = 20, delay: float = 0.15):
+    if not sys.platform.startswith("linux"):
+        return
+
+    for _ in range(attempts):
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--class", "vlc"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                for wid in ids[-3:]:
+                    subprocess.run(["xdotool", "windowmap", wid], capture_output=True, text=True, check=False)
+                    subprocess.run(["xdotool", "windowraise", wid], capture_output=True, text=True, check=False)
+                    subprocess.run(["xdotool", "windowactivate", "--sync", wid], capture_output=True, text=True, check=False)
+                    subprocess.run(["wmctrl", "-i", "-r", wid, "-b", "add,above,fullscreen"], capture_output=True, text=True, check=False)
+
+                log.info("VLC window activated/raised")
+                print("VLC window activated/raised")
+                return
+        except Exception:
+            pass
+
+        time.sleep(delay)
+
+    try:
+        subprocess.run(["wmctrl", "-a", "VLC media player"], capture_output=True, text=True, check=False)
+    except Exception:
+        pass
+
+
 def start_vlc(dummy_video: str):
     if not shutil.which("cvlc"):
         log.error("cvlc not installed")
@@ -226,8 +260,10 @@ def start_vlc(dummy_video: str):
         "--intf", "dummy",
         "--extraintf", "rc",
         "--rc-host", f"{RC_HOST}:{RC_PORT}",
+        "--x11-display", os.environ.get("DISPLAY", ":0"),
         "--vout", "x11",
         "--avcodec-hw=none",
+        "--no-embedded-video",
         "--video-x", "0",
         "--video-y", "0",
         "--fullscreen",
@@ -257,6 +293,9 @@ def start_vlc(dummy_video: str):
     if not wait_for_rc():
         log.error("VLC RC interface did not respond")
         sys.exit(1)
+
+    # Make sure VLC surface is visible even when launched from different terminals/sessions.
+    force_vlc_window_visible()
 
 
 def build_playlist(video_paths):
@@ -330,6 +369,7 @@ def switch_to_video(video_file: str):
     print(f"Switch request: {video_file}")
     ok = rebuild_switch_playlist(video_file)
     if ok:
+        force_vlc_window_visible()
         log.info(f"Switched to: {video_file}")
         print(f"Switched to: {video_file}")
     else:
