@@ -172,7 +172,7 @@ COIL_REARM_LOW_SECONDS = float(os.environ.get("COIL_REARM_LOW_SECONDS", "0.9"))
 
 # Step1 transition timing (guide -> step1) to avoid first-frame flash.
 STEP1_BLACK_PRESETTLE_SECONDS = float(os.environ.get("STEP1_BLACK_PRESETTLE_SECONDS", "0.16"))
-STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.12"))
+STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.01"))
 STEP1_BLACK_HOLD_SECONDS = float(os.environ.get("STEP1_BLACK_HOLD_SECONDS", "0.90"))
 
 # Video playback queue (serialize requests from Modbus thread)
