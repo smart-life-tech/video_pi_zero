@@ -144,37 +144,37 @@ def main():
     # Build playlist cleanly
     rc("stop")
     rc("clear")
-    rc("loop off")
+    rc("repeat off")
+    rc("loop on")
     rc("random off")
 
-    for v in video_paths:
-        rc(f"add {v}")
+    # Add first item as active, enqueue the rest in order.
+    rc(f"add {video_paths[0]}")
+    time.sleep(0.1)
+    for v in video_paths[1:]:
+        rc(f"enqueue {v}")
         time.sleep(0.05)
 
-    # IMPORTANT: VLC playlist indices are 1-based
-    current_index = 1
+    current_index = 0
 
-    rc(f"goto {current_index}")
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
 
-    log.info(f"Playing playlist index {current_index}")
+    log.info(f"Playing: {os.path.basename(video_paths[current_index])}")
 
     # Timed switching
     while True:
         time.sleep(SWITCH_INTERVAL_SECONDS)
 
-        current_index += 1
-        if current_index > len(video_paths):
-            current_index = 1
+        current_index = (current_index + 1) % len(video_paths)
 
-        rc(f"goto {current_index}")
+        rc("next")
         rc("seek 0")
         rc("play")
         rc("fullscreen on")
 
-        log.info(f"Switched to playlist index {current_index}")
+        log.info(f"Switched to: {os.path.basename(video_paths[current_index])}")
 
 
 if __name__ == "__main__":
