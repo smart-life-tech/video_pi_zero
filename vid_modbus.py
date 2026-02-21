@@ -199,6 +199,26 @@ def switch_to_video(video_file: str):
     log.info(f"Switched to: {video_file}")
 
 
+def start_guide_idle():
+    """Force guide video to become visible immediately at startup."""
+    guide_name = "Guide_steps.mp4"
+    idx = VIDEO_INDEX.get(guide_name)
+    if idx is None:
+        log.error("Guide_steps.mp4 is not in playlist index")
+        return
+
+    # Re-assert commands during VLC/vout warm-up to avoid delayed first display.
+    for _ in range(6):
+        rc("repeat on")
+        rc(f"goto {idx}")
+        rc("seek 0")
+        rc("play")
+        rc("fullscreen on")
+        time.sleep(0.2)
+
+    log.info("Guide startup asserted")
+
+
 def can_trigger(action_name: str) -> bool:
     now = time.time()
     if now - last_trigger_time[action_name] < TRIGGER_COOLDOWN_SECONDS:
@@ -335,8 +355,8 @@ def main():
     start_vlc(video_paths[0])
     build_playlist(video_paths)
 
-    # Start on guide
-    switch_to_video("Guide_steps.mp4")
+    # Start on guide immediately and keep it visible until a trigger arrives
+    start_guide_idle()
 
     if not ensure_network_ready():
         print("Could not configure Ethernet network for PLC")
