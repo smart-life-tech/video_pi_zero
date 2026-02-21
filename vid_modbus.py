@@ -174,6 +174,7 @@ COIL_REARM_LOW_SECONDS = float(os.environ.get("COIL_REARM_LOW_SECONDS", "0.9"))
 STEP1_BLACK_PRESETTLE_SECONDS = float(os.environ.get("STEP1_BLACK_PRESETTLE_SECONDS", "0.16"))
 STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.01"))
 STEP1_BLACK_HOLD_SECONDS = float(os.environ.get("STEP1_BLACK_HOLD_SECONDS", "0.90"))
+TRANSITION_BLACK_HOLD_SECONDS = float(os.environ.get("TRANSITION_BLACK_HOLD_SECONDS", "0.45"))
 
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
@@ -336,6 +337,32 @@ def _hold_black_cover_on_top_linux(black_process_handle, hold_seconds=0.45):
         except Exception:
             return
         time.sleep(0.05)
+
+
+def _start_black_transition_guard_linux(black_process_handle):
+    """Keep black cover and terminal-hide enforcement active until returned event is set."""
+    stop_event = threading.Event()
+    if not sys.platform.startswith("linux") or black_process_handle is None:
+        stop_event.set()
+        return stop_event
+
+    def _guard_loop():
+        next_hide_terminal_at = 0.0
+        while not stop_event.is_set():
+            try:
+                if black_process_handle.poll() is not None:
+                    return
+                _raise_vlc_windows_for_pid_linux(black_process_handle)
+                now = time.time()
+                if now >= next_hide_terminal_at:
+                    hide_terminal_window_linux()
+                    next_hide_terminal_at = now + 0.25
+            except Exception:
+                return
+            time.sleep(0.04)
+
+    threading.Thread(target=_guard_loop, daemon=True).start()
+    return stop_event
 
 
 def _prepare_transition_cover_locked():
@@ -623,6 +650,7 @@ def _play_trigger_once_locked(video_file):
 
         # Keep black cover visible before and during transition.
         _prepare_transition_cover_locked()
+        transition_black_guard = _start_black_transition_guard_linux(black_vlc_process)
 
         # Tear down any previous trigger process before starting the new one.
         # This prevents stale-frame leaks (e.g., Warning loop flash) during guide -> step1 handoff.
@@ -677,6 +705,10 @@ def _play_trigger_once_locked(video_file):
 
             new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _post_launch_fix_vlc_window(new_trigger)
+
+        post_hold_seconds = STEP1_BLACK_HOLD_SECONDS if is_step1_target else TRANSITION_BLACK_HOLD_SECONDS
+        time.sleep(post_hold_seconds)
+        transition_black_guard.set()
         trigger_vlc_process = new_trigger
     trigger_video_active = True
     idle_guide_active = False
