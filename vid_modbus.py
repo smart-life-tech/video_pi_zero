@@ -170,6 +170,11 @@ MODBUS_READ_FAILURES_BEFORE_RECONNECT = int(os.environ.get("MODBUS_READ_FAILURES
 MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 COIL_REARM_LOW_SECONDS = float(os.environ.get("COIL_REARM_LOW_SECONDS", "0.9"))
 
+# Step1 transition timing (guide -> step1) to avoid first-frame flash.
+STEP1_BLACK_PRESETTLE_SECONDS = float(os.environ.get("STEP1_BLACK_PRESETTLE_SECONDS", "0.16"))
+STEP1_GUIDE_STOP_SETTLE_SECONDS = float(os.environ.get("STEP1_GUIDE_STOP_SETTLE_SECONDS", "0.12"))
+STEP1_BLACK_HOLD_SECONDS = float(os.environ.get("STEP1_BLACK_HOLD_SECONDS", "0.90"))
+
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
 video_process_lock = threading.Lock()
@@ -616,36 +621,43 @@ def _play_trigger_once_locked(video_file):
         # Keep black cover visible before and during transition.
         _prepare_transition_cover_locked()
 
-        # Idle guide must not overlap with a trigger video.
-        guide_vlc_process = _stop_process_locked(guide_vlc_process)
-        idle_guide_active = False
-
         previous_trigger = trigger_vlc_process
         cmd = player_cmd + _vlc_fullscreen_base_args() + [
             "--play-and-exit",
             "--no-audio",
             video_path,
         ]
-        step1_cover_hold_seconds = 0.95
         new_trigger = None
         if is_step1_target:
             logger.info("Applying step1 black-cover hold path")
             print("[TRANSITION] Applying step1 black-cover hold path")
-            # For step1, always hold black cover while process initializes to avoid pre-roll flash.
+
+            # Keep black stably above everything before guide is torn down.
             black_cover_snapshot = black_vlc_process
             if black_cover_snapshot is not None and black_cover_snapshot.poll() is None:
+                _raise_vlc_windows_for_pid_linux(black_cover_snapshot)
                 threading.Thread(
                     target=_hold_black_cover_on_top_linux,
-                    args=(black_cover_snapshot, step1_cover_hold_seconds),
+                    args=(black_cover_snapshot, STEP1_BLACK_HOLD_SECONDS),
                     daemon=True,
                 ).start()
-            # Let black settle on top before creating step1 window to prevent first-frame leak.
-            # time.sleep(1)
+
+            # Let black settle first, then stop guide, then let compositor settle again.
+            time.sleep(STEP1_BLACK_PRESETTLE_SECONDS)
+            guide_vlc_process = _stop_process_locked(guide_vlc_process)
+            idle_guide_active = False
+            time.sleep(STEP1_GUIDE_STOP_SETTLE_SECONDS)
+
             new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _post_launch_fix_vlc_window(new_trigger, delay_seconds=step1_cover_hold_seconds)
+            _post_launch_fix_vlc_window(new_trigger, delay_seconds=STEP1_BLACK_HOLD_SECONDS)
         else:
             logger.info("Applying standard trigger transition path")
             print("[TRANSITION] Applying standard trigger transition path")
+
+            # Idle guide must not overlap with a non-step1 trigger video.
+            guide_vlc_process = _stop_process_locked(guide_vlc_process)
+            idle_guide_active = False
+
             new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
