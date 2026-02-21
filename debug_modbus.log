@@ -1,0 +1,11 @@
+2026-02-21 13:18:35,532 - INFO - Modbus Video Player started
+2026-02-21 13:18:35,976 - INFO - Video Player started
+2026-02-21 13:18:36,621 - INFO - === Modbus Video Player Startup ===
+2026-02-21 13:18:36,622 - INFO - Modbus Server: 192.168.1.100:504
+2026-02-21 13:18:36,622 - INFO - Configured coils: {'Process_step_1': 0, 'Guide_steps': 1, 'Warning': 2, 'Process_step_2': 3, 'Process_step_3': 4}
+2026-02-21 13:18:36,622 - INFO - Skipping IP setup (non-Linux platform)
+2026-02-21 13:18:36,623 - INFO - Skipping IP setup (non-Linux platform)
+2026-02-21 13:18:36,623 - INFO - Connecting to Modbus server at 192.168.1.100:504
+2026-02-21 13:18:39,649 - ERROR - Connection to (192.168.1.100, 504) failed: timed out
+2026-02-21 13:18:39,649 - ERROR - Failed to connect to Modbus server
+2026-02-21 13:18:39,650 - ERROR - Failed to establish initial Modbus connection

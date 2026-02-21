@@ -162,6 +162,12 @@ COOLDOWN_SECONDS = 5  # Minimum seconds between triggers
 
 # Global Modbus client
 modbus_client = None
+modbus_client_lock = threading.Lock()
+modbus_running = False
+
+MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.2"))
+MODBUS_READ_FAILURES_BEFORE_RECONNECT = int(os.environ.get("MODBUS_READ_FAILURES_BEFORE_RECONNECT", "4"))
+MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
@@ -174,6 +180,7 @@ USE_VLC_RC_CONTROL = False
 VLC_RC_HOST = "127.0.0.1"
 VLC_RC_PORT = 4213
 vlc_supervisor_running = False
+video_worker_running = False
 trigger_video_active = False
 last_requested_video = None
 idle_guide_active = False
@@ -665,12 +672,15 @@ def queue_video_play(video_file):
 
 def video_playback_worker():
     """Single worker that executes play_video to avoid concurrent VLC switches."""
+    global video_worker_running
     logger.info("Video playback worker started")
-    while True:
+    while video_worker_running:
         video_file = None
         try:
-            video_file = video_queue.get()
+            video_file = video_queue.get(timeout=0.3)
             play_video_safe(video_file)
+        except queue.Empty:
+            continue
         except Exception as e:
             logger.error(f"Video playback worker error: {e}")
         finally:
@@ -690,34 +700,40 @@ def connect_modbus():
             logger.error("Required Pi Ethernet IP is not configured")
             return False
 
-        if modbus_client:
-            try:
-                modbus_client.close()
-            except Exception:
-                pass
-        logger.info(f"Connecting to Modbus server at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
-        modbus_client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT)
-        
-        if modbus_client.connect():
-            logger.info("Successfully connected to Modbus server")
-            return True
-        else:
-            logger.error("Failed to connect to Modbus server")
-            return False
+        with modbus_client_lock:
+            if modbus_client:
+                try:
+                    modbus_client.close()
+                except Exception:
+                    pass
+
+            logger.info(f"Connecting to Modbus server at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
+            modbus_client = ModbusTcpClient(
+                MODBUS_SERVER_IP,
+                port=MODBUS_SERVER_PORT,
+                timeout=2,
+            )
+
+            if modbus_client.connect():
+                logger.info("Successfully connected to Modbus server")
+                return True
+
+        logger.error("Failed to connect to Modbus server")
+        return False
     except Exception as e:
         logger.error(f"Modbus connection error: {e}")
         return False
 
 
-def _read_coils_with_unit_id(start_addr, count):
+def _read_coils_with_unit_id(client, start_addr, count):
     """Read coils while handling pymodbus API differences for unit/slave/device_id."""
     try:
-        return modbus_client.read_coils(start_addr, count=count, device_id=MODBUS_UNIT_ID)
+        return client.read_coils(start_addr, count=count, device_id=MODBUS_UNIT_ID)
     except TypeError:
         try:
-            return modbus_client.read_coils(start_addr, count=count, slave=MODBUS_UNIT_ID)
+            return client.read_coils(start_addr, count=count, slave=MODBUS_UNIT_ID)
         except TypeError:
-            return modbus_client.read_coils(start_addr, count=count, unit=MODBUS_UNIT_ID)
+            return client.read_coils(start_addr, count=count, unit=MODBUS_UNIT_ID)
 
 
 def _interface_has_ip(interface_name, ip_address):
@@ -789,13 +805,17 @@ def ensure_pi_ip_for_modbus():
 
 def read_modbus_coils():
     """Read all configured coils from the PLC and return their states"""
-    if not modbus_client or not modbus_client.is_socket_open():
+    global modbus_client
+    with modbus_client_lock:
+        client = modbus_client
+
+    if not client:
         logger.warning("Modbus client not connected")
         return None
     
     try:
         # Read 5 coils starting from address 0
-        result = _read_coils_with_unit_id(0, 5)
+        result = _read_coils_with_unit_id(client, 0, 5)
         
         if result.isError():
             logger.error(f"Error reading coils: {result}")
@@ -805,11 +825,13 @@ def read_modbus_coils():
     
     except Exception as e:
         logger.error(f"Exception reading Modbus coils: {e}")
-        if modbus_client:
-            try:
-                modbus_client.close()
-            except Exception:
-                pass
+        with modbus_client_lock:
+            if modbus_client:
+                try:
+                    modbus_client.close()
+                except Exception:
+                    pass
+                modbus_client = None
         return None
 
 
@@ -839,33 +861,37 @@ def handle_modbus_trigger(action_name):
 
 def modbus_polling_loop():
     """Main loop that polls Modbus coils and triggers videos"""
+    global modbus_running
     logger.info("Starting Modbus polling loop")
     print("[Modbus Monitor] Polling started - waiting for coil changes...\n")
     
     # Track last state of each coil to detect rising edge (0 -> 1 transition)
     last_coil_states = [False] * 5
-    
-    poll_interval = 0.1  # Poll every 100ms
-    
-    while True:
+    consecutive_read_failures = 0
+
+    while modbus_running:
         try:
             # Read current coil states
             coil_states = read_modbus_coils()
             
             if coil_states is None:
-                logger.warning("Failed to read coils; check Modbus connection and PLC status")
-                # Connection lost, try to reconnect
-                logger.warning("Lost Modbus connection, attempting to reconnect...")
-                time.sleep(2)
-                if not connect_modbus():
-                    time.sleep(3)
-                    continue
+                consecutive_read_failures += 1
+                if consecutive_read_failures >= MODBUS_READ_FAILURES_BEFORE_RECONNECT:
+                    logger.warning(
+                        f"Modbus read failed {consecutive_read_failures} times; reconnecting..."
+                    )
+                    time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                    if connect_modbus():
+                        last_coil_states = [False] * 5
+                        consecutive_read_failures = 0
+                        hide_terminal_window_linux()
+                    else:
+                        time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
                 else:
-                    # Reset last states after reconnection
-                    last_coil_states = [False] * 5
-                    # Re-hide terminal after reconnect logs to avoid on-screen flashes.
-                    hide_terminal_window_linux()
-                    continue
+                    time.sleep(MODBUS_POLL_INTERVAL_SECONDS)
+                continue
+
+            consecutive_read_failures = 0
             
             # Check each coil for rising edge (transition from False to True)
             for idx, (action_name, coil_addr) in enumerate(MODBUS_COILS.items()):
@@ -885,19 +911,20 @@ def modbus_polling_loop():
                 # Update last state
                 last_coil_states[idx] = current_state
             
-            time.sleep(poll_interval)
+            time.sleep(MODBUS_POLL_INTERVAL_SECONDS)
             
         except KeyboardInterrupt:
             logger.info("Modbus polling interrupted by user")
             break
         except Exception as e:
             logger.error(f"Error in Modbus polling loop: {e}")
-            time.sleep(1)
+            time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
     
     # Cleanup
-    if modbus_client:
-        modbus_client.close()
-        logger.info("Modbus connection closed")
+    with modbus_client_lock:
+        if modbus_client:
+            modbus_client.close()
+            logger.info("Modbus connection closed")
 
 
 # =============================================================================
@@ -905,7 +932,7 @@ def modbus_polling_loop():
 # =============================================================================
 
 def main():
-    global vlc_supervisor_running, idle_mode_requested
+    global vlc_supervisor_running, idle_mode_requested, modbus_running, video_worker_running
     logger.info("=== Modbus Video Player Startup ===")
     logger.info(f"Modbus Server: {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
     logger.info(f"Configured coils: {MODBUS_COILS}")
@@ -956,6 +983,7 @@ def main():
     root = init_video_window()
 
     # Start playback worker thread (serializes all play requests)
+    video_worker_running = True
     playback_thread = threading.Thread(target=video_playback_worker, daemon=True)
     playback_thread.start()
 
@@ -972,6 +1000,7 @@ def main():
         _play_idle_guide_locked()
     
     # Start Modbus polling in background thread
+    modbus_running = True
     modbus_thread = threading.Thread(target=modbus_polling_loop, daemon=True)
     modbus_thread.start()
     logger.info("Modbus polling thread started")
@@ -993,14 +1022,26 @@ def main():
             logger.info("Interrupted by user")
     
     # Cleanup
+    modbus_running = False
+    video_worker_running = False
     vlc_supervisor_running = False
+
+    try:
+        modbus_thread.join(timeout=2)
+    except Exception:
+        pass
+    try:
+        playback_thread.join(timeout=2)
+    except Exception:
+        pass
 
     if USE_EXTERNAL_VLC:
         with video_process_lock:
             _stop_external_vlc_locked()
 
-    if modbus_client:
-        modbus_client.close()
+    with modbus_client_lock:
+        if modbus_client:
+            modbus_client.close()
     logger.info("Application shutdown complete")
 
 
