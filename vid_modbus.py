@@ -467,7 +467,7 @@ def _ensure_black_screen_loop_locked():
 
 def _play_idle_guide_locked():
     """Play Guide_steps in loop for idle mode. Caller must hold video_process_lock."""
-    global trigger_video_active, guide_vlc_process, black_vlc_process, idle_guide_active, idle_mode_requested
+    global trigger_video_active, guide_vlc_process, black_vlc_process, idle_guide_active, idle_mode_requested, last_requested_video
     idle_mode_requested = True
     guide_path = resolve_video_path("Guide_steps.mp4")
     if not os.path.exists(guide_path):
@@ -523,6 +523,7 @@ def _play_idle_guide_locked():
         _post_launch_fix_vlc_window(guide_vlc_process)
     trigger_video_active = False
     idle_guide_active = True
+    last_requested_video = "Guide_steps.mp4"
     logger.info("Idle guide loop active")
 
 
@@ -566,7 +567,21 @@ def _play_trigger_once_locked(video_file):
             return
 
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
-        is_guide_to_step1 = idle_guide_active and video_file == "Process_step_1.mp4"
+        guide_running_now = guide_vlc_process is not None and guide_vlc_process.poll() is None
+        is_step1_target = video_file == "Process_step_1.mp4"
+        is_guide_to_step1 = (
+            is_step1_target
+            and (idle_guide_active or guide_running_now or last_requested_video == "Guide_steps.mp4")
+        )
+        logger.info(
+            f"Transition check: target={video_file}, idle_guide_active={idle_guide_active}, "
+            f"guide_running_now={guide_running_now}, last_requested_video={last_requested_video}, "
+            f"is_step1_target={is_step1_target}, is_guide_to_step1={is_guide_to_step1}"
+        )
+        print(
+            f"[TRANSITION] target={video_file} step1={is_step1_target} "
+            f"guide_to_step1={is_guide_to_step1}"
+        )
         idle_mode_requested = False
 
         # Keep black cover visible before and during transition.
@@ -583,17 +598,21 @@ def _play_trigger_once_locked(video_file):
             video_path,
         ]
         new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if is_guide_to_step1:
-            # Actively hold black cover on top while step1 process initializes to avoid pre-roll flash.
+        if is_step1_target:
+            logger.info("Applying step1 black-cover hold path")
+            print("[TRANSITION] Applying step1 black-cover hold path")
+            # For step1, always hold black cover while process initializes to avoid pre-roll flash.
             black_cover_snapshot = black_vlc_process
             if black_cover_snapshot is not None and black_cover_snapshot.poll() is None:
                 threading.Thread(
                     target=_hold_black_cover_on_top_linux,
-                    args=(black_cover_snapshot, 0.55),
+                    args=(black_cover_snapshot, 0.75),
                     daemon=True,
                 ).start()
-            _post_launch_fix_vlc_window(new_trigger, delay_seconds=0.55)
+            _post_launch_fix_vlc_window(new_trigger, delay_seconds=0.75)
         else:
+            logger.info("Applying standard trigger transition path")
+            print("[TRANSITION] Applying standard trigger transition path")
             _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
         previous_trigger = _stop_process_locked(previous_trigger)
