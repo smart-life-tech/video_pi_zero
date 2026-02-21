@@ -134,7 +134,7 @@ def terminal_guard_loop():
         time.sleep(TERMINAL_GUARD_INTERVAL_SECONDS)
 
 
-def _send_vlc_command(command: str, timeout_seconds: float = 0.35) -> str:
+def _send_vlc_command(command: str, timeout_seconds: float = 0.8) -> str:
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.settimeout(timeout_seconds)
     try:
@@ -161,12 +161,28 @@ def _send_vlc_command(command: str, timeout_seconds: float = 0.35) -> str:
             pass
 
 
-def _wait_for_vlc_rc(timeout_seconds: float = 6.0) -> bool:
+def _can_connect_vlc_rc(timeout_seconds: float = 0.6) -> bool:
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.settimeout(timeout_seconds)
+    try:
+        client.connect((VLC_RC_HOST, vlc_rc_port_in_use))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def _wait_for_vlc_rc(timeout_seconds: float = 10.0) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if vlc_controller_process and vlc_controller_process.poll() is not None:
             return False
-        if _send_vlc_command("status"):
+        # Some VLC builds accept RC connections but return no immediate status text.
+        if _can_connect_vlc_rc() or _send_vlc_command("status"):
             return True
         time.sleep(0.1)
     return False
