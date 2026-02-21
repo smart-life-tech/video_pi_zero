@@ -620,8 +620,8 @@ def _play_trigger_once_locked(video_file):
     trigger_video_active = True
     idle_guide_active = False
     last_requested_video = video_file
-    logger.info(f"Switched to trigger video: {video_file}")
-    print(f"Switched to: {video_file}")
+    logger.info(f"Rising-edge switch complete: {video_file}")
+    print(f"Rising-edge switch complete: {video_file}")
 
 
 def _vlc_state_locked():
@@ -931,7 +931,7 @@ def modbus_polling_loop():
     """Main loop that polls Modbus coils and triggers videos"""
     global modbus_running
     logger.info("Starting Modbus polling loop")
-    print("[Modbus Monitor] Polling started - waiting for coil changes...\n")
+    print("[Modbus Monitor] Polling started - rising edge only mode.\n")
     
     # Track last state of each coil to detect rising edge (0 -> 1 transition)
     last_coil_states = [False] * 5
@@ -979,10 +979,9 @@ def modbus_polling_loop():
                             f"Ignored short re-arm on coil {coil_addr} ({action_name}); "
                             f"low_duration={low_duration:.3f}s"
                         )
-                # Also log falling edge for visibility
+                # Falling edge is ignored for switching (rising edge only mode).
                 elif not current_state and previous_state:
-                    logger.info(f"Falling edge detected on coil {coil_addr} ({action_name})")
-                    print(f"[Coil {coil_addr}] State changed: ON -> OFF ({action_name})")
+                    logger.debug(f"Falling edge observed on coil {coil_addr} ({action_name})")
                     low_since_times[idx] = time.time()
                 
                 # Update last state
