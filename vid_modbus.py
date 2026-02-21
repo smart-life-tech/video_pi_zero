@@ -286,6 +286,24 @@ def _post_launch_fix_vlc_window(process_handle, delay_seconds=0.0):
     threading.Thread(target=_delayed_fix, daemon=True).start()
 
 
+def _hold_black_cover_on_top_linux(black_process_handle, hold_seconds=0.45):
+    """Keep black cover window above other VLC windows during transition warmup."""
+    if not sys.platform.startswith("linux"):
+        return
+    if black_process_handle is None:
+        return
+
+    deadline = time.time() + max(0.0, hold_seconds)
+    while time.time() < deadline:
+        try:
+            if black_process_handle.poll() is not None:
+                return
+            _force_vlc_window_fullscreen_linux(black_process_handle)
+        except Exception:
+            return
+        time.sleep(0.05)
+
+
 def _prepare_transition_cover_locked():
     """Ensure black cover is visible before any player handoff."""
     if not sys.platform.startswith("linux"):
@@ -566,8 +584,15 @@ def _play_trigger_once_locked(video_file):
         ]
         new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if is_guide_to_step1:
-            # Keep black transition cover on top briefly to hide early partial-frame flash.
-            _post_launch_fix_vlc_window(new_trigger, delay_seconds=1.5)
+            # Actively hold black cover on top while step1 process initializes to avoid pre-roll flash.
+            black_cover_snapshot = black_vlc_process
+            if black_cover_snapshot is not None and black_cover_snapshot.poll() is None:
+                threading.Thread(
+                    target=_hold_black_cover_on_top_linux,
+                    args=(black_cover_snapshot, 0.55),
+                    daemon=True,
+                ).start()
+            _post_launch_fix_vlc_window(new_trigger, delay_seconds=0.55)
         else:
             _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
