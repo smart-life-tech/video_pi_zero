@@ -9,6 +9,7 @@ import threading
 import logging
 import subprocess
 import shutil
+import socket
 
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -34,17 +35,12 @@ VIDEO_SEQUENCE = [
 ]
 
 SWITCH_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_INTERVAL_SECONDS", "5"))
-TRANSITION_BLACK_HOLD_SECONDS = float(os.environ.get("VID_TEST_BLACK_HOLD_SECONDS", "0.65"))
-TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_TERMINAL_GUARD_SECONDS", "0.1"))
-STARTUP_BLACK_HOLD_SECONDS = float(os.environ.get("VID_TEST_STARTUP_BLACK_HOLD_SECONDS", "1.5"))
+TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_TERMINAL_GUARD_SECONDS", "0.08"))
+VLC_RC_HOST = os.environ.get("VID_TEST_VLC_RC_HOST", "127.0.0.1")
+VLC_RC_PORT = int(os.environ.get("VID_TEST_VLC_RC_PORT", "4215"))
 
-video_process_lock = threading.Lock()
-current_video_process = None
-black_vlc_process = None
 terminal_guard_running = False
-transition_mask_active = False
-BLACK_IMAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_black_test.ppm")
-
+vlc_controller_process = None
 TERMINAL_WINDOW_CLASSES = [
     "lxterminal",
     "xfce4-terminal",
@@ -78,17 +74,6 @@ def _get_vlc_player_cmd():
     return None
 
 
-def _vlc_fullscreen_base_args():
-    return [
-        "--fullscreen",
-        "--video-on-top",
-        "--no-video-title-show",
-        "--no-video-deco",
-        "--no-qt-fs-controller",
-        "--quiet",
-    ]
-
-
 def _stop_process(proc):
     if proc is None:
         return None
@@ -105,100 +90,27 @@ def _stop_process(proc):
     return None
 
 
-def _raise_vlc_windows_for_pid_linux(process_handle):
-    if not sys.platform.startswith("linux") or process_handle is None:
-        return
-    if shutil.which("xdotool") is None:
-        return
-
-    try:
-        result = subprocess.run(
-            ["xdotool", "search", "--pid", str(process_handle.pid)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-        for window_id in window_ids:
-            if shutil.which("wmctrl"):
-                subprocess.run(
-                    ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    except Exception:
-        return
-
-
-def _post_launch_fix_vlc_window(process_handle, delay_seconds=0.0):
-    if not sys.platform.startswith("linux"):
-        return
-
-    def _delayed_fix():
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)
-        _raise_vlc_windows_for_pid_linux(process_handle)
-
-    threading.Thread(target=_delayed_fix, daemon=True).start()
-
-
-def _hold_black_cover_on_top_linux(black_process_handle, hold_seconds=0.45):
-    if not sys.platform.startswith("linux"):
-        return
-    if black_process_handle is None:
-        return
-
-    deadline = time.time() + max(0.0, hold_seconds)
-    while time.time() < deadline:
-        try:
-            if black_process_handle.poll() is not None:
-                return
-            _raise_vlc_windows_for_pid_linux(black_process_handle)
-        except Exception:
-            return
-        time.sleep(0.05)
-
-
 def hide_terminal_window_linux():
     if not sys.platform.startswith("linux"):
         return
 
-    commands = [
+    quick_cmds = [
         ["xdotool", "getactivewindow", "windowminimize"],
         ["wmctrl", "-r", ":ACTIVE:", "-b", "add,hidden"],
     ]
-    for cmd in commands:
+    for cmd in quick_cmds:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode == 0:
-                return
+            subprocess.run(cmd, capture_output=True, text=True, check=False)
         except Exception:
-            continue
+            pass
 
     if shutil.which("xdotool") is None:
         return
 
-    # Aggressively minimize terminal windows by common class/name patterns.
     for class_name in TERMINAL_WINDOW_CLASSES:
         try:
             result = subprocess.run(
                 ["xdotool", "search", "--onlyvisible", "--class", class_name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-            for window_id in window_ids:
-                subprocess.run(["xdotool", "windowminimize", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        except Exception:
-            continue
-
-    for token in ("Terminal", "LXTerminal", "xterm"):
-        try:
-            result = subprocess.run(
-                ["xdotool", "search", "--onlyvisible", "--name", token],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -216,97 +128,112 @@ def terminal_guard_loop():
         return
     while terminal_guard_running:
         hide_terminal_window_linux()
-        if transition_mask_active and black_vlc_process is not None and black_vlc_process.poll() is None:
-            _raise_vlc_windows_for_pid_linux(black_vlc_process)
         time.sleep(TERMINAL_GUARD_INTERVAL_SECONDS)
 
 
-def _ensure_black_image_file():
-    if os.path.exists(BLACK_IMAGE_PATH):
-        return
-    with open(BLACK_IMAGE_PATH, "w", encoding="ascii") as file:
-        file.write("P3\n1 1\n255\n0 0 0\n")
+def _send_vlc_command(command: str, timeout_seconds: float = 0.35) -> str:
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.settimeout(timeout_seconds)
+    try:
+        client.connect((VLC_RC_HOST, VLC_RC_PORT))
+        client.sendall((command + "\n").encode("utf-8", errors="ignore"))
+        chunks = []
+        while True:
+            try:
+                data = client.recv(4096)
+                if not data:
+                    break
+                chunks.append(data)
+                if len(data) < 4096:
+                    break
+            except socket.timeout:
+                break
+        return b"".join(chunks).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
-def _ensure_black_screen_loop_locked():
-    global black_vlc_process
+def _wait_for_vlc_rc(timeout_seconds: float = 6.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if vlc_controller_process and vlc_controller_process.poll() is not None:
+            return False
+        if _send_vlc_command("status"):
+            return True
+        time.sleep(0.1)
+    return False
 
-    if black_vlc_process is not None and black_vlc_process.poll() is None:
-        return
 
+def _quote_path(path_value: str) -> str:
+    return '"' + path_value.replace('"', '\\"') + '"'
+
+
+def _start_vlc_controller() -> bool:
+    global vlc_controller_process
     player_cmd = _get_vlc_player_cmd()
     if player_cmd is None:
-        raise RuntimeError("Neither 'cvlc' nor 'vlc' command is available")
+        logger.error("Neither 'cvlc' nor 'vlc' command is available")
+        return False
 
-    _ensure_black_image_file()
-    black_vlc_process = _stop_process(black_vlc_process)
-
-    cmd = player_cmd + _vlc_fullscreen_base_args() + [
-        "--loop",
-        "--image-duration", "-1",
+    vlc_controller_process = _stop_process(vlc_controller_process)
+    cmd = player_cmd + [
+        "--fullscreen",
+        "--video-on-top",
+        "--no-video-title-show",
+        "--no-video-deco",
+        "--no-qt-fs-controller",
+        "--quiet",
         "--no-audio",
-        BLACK_IMAGE_PATH,
+        "--extraintf", "rc",
+        "--rc-host", f"{VLC_RC_HOST}:{VLC_RC_PORT}",
     ]
-    black_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _post_launch_fix_vlc_window(black_vlc_process)
+    vlc_controller_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return _wait_for_vlc_rc()
 
 
-def _prepare_transition_cover_locked():
+def _preload_playlist(video_paths):
+    _send_vlc_command("stop")
+    _send_vlc_command("clear")
+    for path in video_paths:
+        _send_vlc_command(f"enqueue {_quote_path(path)}")
+        time.sleep(0.03)
+    _send_vlc_command("stop")
+
+
+def _switch_to_preloaded_index(index: int, name: str):
     hide_terminal_window_linux()
-    _ensure_black_screen_loop_locked()
-    if black_vlc_process is not None and black_vlc_process.poll() is None:
-        _raise_vlc_windows_for_pid_linux(black_vlc_process)
-    time.sleep(0.08)
-
-
-def play_video_smooth(video_file: str):
-    global current_video_process, transition_mask_active
-
-    video_path = resolve_video_path(video_file)
-    if not os.path.exists(video_path):
-        logger.warning(f"Missing video, skipped: {video_path}")
-        return
-
-    player_cmd = _get_vlc_player_cmd()
-    if player_cmd is None:
-        logger.error("Install VLC command-line player (cvlc)")
-        return
-
-    with video_process_lock:
-        transition_mask_active = True
-        _prepare_transition_cover_locked()
-
-        current_video_process = _stop_process(current_video_process)
-
-        if black_vlc_process is not None and black_vlc_process.poll() is None:
-            threading.Thread(
-                target=_hold_black_cover_on_top_linux,
-                args=(black_vlc_process, TRANSITION_BLACK_HOLD_SECONDS),
-                daemon=True,
-            ).start()
-
-        cmd = player_cmd + _vlc_fullscreen_base_args() + [
-            "--play-and-exit",
-            "--no-audio",
-            video_path,
-        ]
-        current_video_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _post_launch_fix_vlc_window(current_video_process, delay_seconds=TRANSITION_BLACK_HOLD_SECONDS)
-        time.sleep(TRANSITION_BLACK_HOLD_SECONDS)
-        transition_mask_active = False
-
-    logger.info(f"Now playing: {video_file}")
+    _send_vlc_command(f"goto {index}")
+    _send_vlc_command("seek 0")
+    _send_vlc_command("play")
+    logger.info(f"Switched to: {name} (index {index})")
 
 
 def main():
-    global terminal_guard_running, current_video_process, black_vlc_process
+    global terminal_guard_running, vlc_controller_process
 
     logger.info("=== Timed Video Test Started ===")
     logger.info(f"Switch interval: {SWITCH_INTERVAL_SECONDS}s")
     logger.info(f"Sequence: {VIDEO_SEQUENCE}")
 
     if not sys.platform.startswith("linux"):
-        logger.error("vid_test.py is intended for Raspberry Pi/Linux external VLC mode.")
+        logger.error("vid_test.py is intended for Raspberry Pi/Linux.")
+        return
+
+    resolved_sequence = []
+    for video_name in VIDEO_SEQUENCE:
+        path = resolve_video_path(video_name)
+        if not os.path.exists(path):
+            logger.warning(f"Missing video, skipped: {path}")
+            continue
+        resolved_sequence.append((video_name, path))
+
+    if not resolved_sequence:
+        logger.error("No valid videos found in sequence")
         return
 
     terminal_guard_running = True
@@ -314,22 +241,19 @@ def main():
     terminal_guard_thread.start()
 
     try:
-        with video_process_lock:
-            _ensure_black_screen_loop_locked()
-            if black_vlc_process is not None and black_vlc_process.poll() is None:
-                _hold_black_cover_on_top_linux(black_vlc_process, STARTUP_BLACK_HOLD_SECONDS)
+        if not _start_vlc_controller():
+            logger.error("Could not start VLC RC controller")
+            return
+
+        _preload_playlist([path for _, path in resolved_sequence])
+        logger.info("Preloaded all videos at startup")
 
         index = 0
         while True:
-            video_file = VIDEO_SEQUENCE[index % len(VIDEO_SEQUENCE)]
-            play_video_smooth(video_file)
+            name, _path = resolved_sequence[index % len(resolved_sequence)]
+            _switch_to_preloaded_index(index % len(resolved_sequence), name)
             index += 1
-
-            sleep_left = SWITCH_INTERVAL_SECONDS
-            while sleep_left > 0:
-                tick = min(0.2, sleep_left)
-                time.sleep(tick)
-                sleep_left -= tick
+            time.sleep(SWITCH_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
@@ -340,10 +264,7 @@ def main():
         except Exception:
             pass
 
-        with video_process_lock:
-            current_video_process = _stop_process(current_video_process)
-            black_vlc_process = _stop_process(black_vlc_process)
-
+        vlc_controller_process = _stop_process(vlc_controller_process)
         logger.info("vid_test shutdown complete")
 
 
