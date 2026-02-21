@@ -126,9 +126,11 @@ PLC_PING_IP = os.environ.get("PLC_PING_IP", "192.168.1.100")
 
 RC_HOST = "127.0.0.1"
 RC_PORT = int(os.environ.get("VLC_RC_PORT", "4213"))
+VLC_LOG_FILE = os.environ.get("VLC_LOG_FILE", "vlc_startup.log")
 
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
+read_fail_streak = 0
 
 
 # ===============================
@@ -169,10 +171,55 @@ def wait_for_rc(timeout=8) -> bool:
     return False
 
 
+def cleanup_existing_vlc():
+    if not sys.platform.startswith("linux"):
+        return
+
+    patterns = [
+        f"cvlc.*--rc-host {RC_HOST}:{RC_PORT}",
+        f"vlc.*--rc-host {RC_HOST}:{RC_PORT}",
+    ]
+    for pattern in patterns:
+        try:
+            subprocess.run(["pkill", "-f", pattern], capture_output=True, text=True, check=False)
+        except Exception:
+            pass
+    time.sleep(0.2)
+
+
+def verify_x11_access() -> bool:
+    if not sys.platform.startswith("linux"):
+        return True
+
+    display = os.environ.get("DISPLAY", ":0")
+    env = os.environ.copy()
+
+    probe_cmds = [
+        ["xdpyinfo", "-display", display],
+        ["xset", "q"],
+    ]
+
+    for cmd in probe_cmds:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
+            if result.returncode == 0:
+                log.info(f"X11 probe OK via: {' '.join(cmd)}")
+                print(f"X11 probe OK via: {' '.join(cmd)}")
+                return True
+        except Exception:
+            continue
+
+    log.error("X11 probe failed (cannot query active display)")
+    print("X11 probe failed (cannot query active display)")
+    return False
+
+
 def start_vlc(dummy_video: str):
     if not shutil.which("cvlc"):
         log.error("cvlc not installed")
         sys.exit(1)
+
+    cleanup_existing_vlc()
 
     cmd = [
         "cvlc",
@@ -192,10 +239,17 @@ def start_vlc(dummy_video: str):
     ]
 
     log.info("Launching VLC RC controller")
+    print(f"Launching VLC RC controller (log: {VLC_LOG_FILE})")
+
+    vlc_log = open(VLC_LOG_FILE, "a", buffering=1)
+    vlc_log.write("\n=== VLC launch ===\n")
+    vlc_log.write("Command: " + " ".join(cmd) + "\n")
+    vlc_log.write(f"DISPLAY={os.environ.get('DISPLAY')} XAUTHORITY={os.environ.get('XAUTHORITY')}\n")
+
     subprocess.Popen(
         cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=vlc_log,
+        stderr=vlc_log,
         env=os.environ.copy(),
         start_new_session=True,
     )
@@ -402,18 +456,15 @@ def read_coils():
     if not modbus_client:
         return None
     try:
-        try:
-            result = modbus_client.read_coils(0, count=5, device_id=MODBUS_UNIT_ID)
-        except TypeError:
-            try:
-                result = modbus_client.read_coils(0, count=5, slave=MODBUS_UNIT_ID)
-            except TypeError:
-                result = modbus_client.read_coils(0, count=5, unit=MODBUS_UNIT_ID)
+        # Match known-stable modbus_test.py behavior.
+        result = modbus_client.read_coils(0, count=5)
 
         if result.isError():
+            log.warning(f"Modbus read error response: {result}")
             return None
         return result.bits[:5]
-    except Exception:
+    except Exception as e:
+        log.warning(f"Modbus read exception: {e}")
         return None
 
 
@@ -427,6 +478,10 @@ def main():
 
     if not configure_x11_auth():
         print("Startup aborted: no X11 authorization available")
+        return
+
+    if not verify_x11_access():
+        print("Startup aborted: X11 display is not accessible from this terminal session")
         return
 
     global AVAILABLE_VIDEO_PATHS
@@ -465,16 +520,26 @@ def main():
 
     print("Monitoring coils 0-4 (rising edge only). Ctrl+C to exit.")
     last_states = [False] * 5
+    global read_fail_streak
+    read_fail_streak = 0
 
     try:
         while True:
             states = read_coils()
             if states is None:
-                log.warning("Modbus read failed, reconnecting...")
-                time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
-                connect_modbus()
-                time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                read_fail_streak += 1
+                if read_fail_streak >= 5:
+                    log.warning("Modbus read failed repeatedly, reconnecting...")
+                    print("Modbus read failed repeatedly, reconnecting...")
+                    time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                    connect_modbus()
+                    read_fail_streak = 0
+                    time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                else:
+                    time.sleep(MODBUS_POLL_INTERVAL_SECONDS)
                 continue
+
+            read_fail_streak = 0
 
             for idx, (action_name, coil_addr) in enumerate(MODBUS_COILS.items()):
                 current = bool(states[idx])
