@@ -274,6 +274,34 @@ def _force_vlc_window_fullscreen_linux(process_handle):
             time.sleep(0.1)
 
 
+def _raise_vlc_windows_for_pid_linux(process_handle):
+    """Lightweight best-effort raise/fullscreen for already-created VLC windows."""
+    if not sys.platform.startswith("linux") or process_handle is None:
+        return
+    if shutil.which("xdotool") is None:
+        return
+
+    try:
+        result = subprocess.run(
+            ["xdotool", "search", "--pid", str(process_handle.pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        for window_id in window_ids:
+            if shutil.which("wmctrl"):
+                subprocess.run(
+                    ["wmctrl", "-i", "-r", window_id, "-b", "add,fullscreen,above"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            subprocess.run(["xdotool", "windowraise", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        return
+
+
 def _post_launch_fix_vlc_window(process_handle, delay_seconds=0.0):
     """Run fullscreen/decorations fix asynchronously after VLC spawn."""
     if not sys.platform.startswith("linux"):
@@ -299,7 +327,7 @@ def _hold_black_cover_on_top_linux(black_process_handle, hold_seconds=0.45):
         try:
             if black_process_handle.poll() is not None:
                 return
-            _force_vlc_window_fullscreen_linux(black_process_handle)
+            _raise_vlc_windows_for_pid_linux(black_process_handle)
         except Exception:
             return
         time.sleep(0.05)
@@ -598,7 +626,8 @@ def _play_trigger_once_locked(video_file):
             "--no-audio",
             video_path,
         ]
-        new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        step1_cover_hold_seconds = 0.95
+        new_trigger = None
         if is_step1_target:
             logger.info("Applying step1 black-cover hold path")
             print("[TRANSITION] Applying step1 black-cover hold path")
@@ -607,13 +636,17 @@ def _play_trigger_once_locked(video_file):
             if black_cover_snapshot is not None and black_cover_snapshot.poll() is None:
                 threading.Thread(
                     target=_hold_black_cover_on_top_linux,
-                    args=(black_cover_snapshot, 0.75),
+                    args=(black_cover_snapshot, step1_cover_hold_seconds),
                     daemon=True,
                 ).start()
-            _post_launch_fix_vlc_window(new_trigger, delay_seconds=0.75)
+            # Let black settle on top before creating step1 window to prevent first-frame leak.
+            time.sleep(0.22)
+            new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _post_launch_fix_vlc_window(new_trigger, delay_seconds=step1_cover_hold_seconds)
         else:
             logger.info("Applying standard trigger transition path")
             print("[TRANSITION] Applying standard trigger transition path")
+            new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
         previous_trigger = _stop_process_locked(previous_trigger)
