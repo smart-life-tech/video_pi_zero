@@ -10,7 +10,6 @@ import logging
 import subprocess
 import shutil
 import socket
-import re
 
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -48,7 +47,7 @@ VLC_RC_PORT_FALLBACK_COUNT = int(os.environ.get("VID_TEST_VLC_RC_PORT_FALLBACK_C
 terminal_guard_running = False
 vlc_controller_process = None
 vlc_rc_port_in_use = VLC_RC_PORT
-playlist_item_ids = []
+current_playlist_index = 0
 TERMINAL_WINDOW_CLASSES = [
     "lxterminal",
     "xfce4-terminal",
@@ -197,7 +196,7 @@ def _quote_path(path_value: str) -> str:
     return '"' + path_value.replace('"', '\\"') + '"'
 
 
-def _build_vlc_rc_commands(player_cmd, rc_port):
+def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
     common_video_args = [
         "--fullscreen",
         "--video-on-top",
@@ -212,26 +211,26 @@ def _build_vlc_rc_commands(player_cmd, rc_port):
     commands.append(
         player_cmd
         + common_video_args
-        + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}"]
+        + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
     )
 
     base_exec = player_cmd[0]
     commands.append(
         [base_exec, "-I", "rc"]
         + common_video_args
-        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}"]
+        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
     )
 
     commands.append(
         [base_exec, "-I", "rc"]
         + common_video_args
-        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", "--rc-fake-tty"]
+        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", "--rc-fake-tty", initial_media_path]
     )
 
     return commands
 
 
-def _start_vlc_controller() -> bool:
+def _start_vlc_controller(initial_media_path: str) -> bool:
     global vlc_controller_process, vlc_rc_port_in_use
     player_cmd = _get_vlc_player_cmd()
     if player_cmd is None:
@@ -243,7 +242,7 @@ def _start_vlc_controller() -> bool:
     port_candidates = [VLC_RC_PORT + i for i in range(max(1, VLC_RC_PORT_FALLBACK_COUNT))]
 
     for rc_port in port_candidates:
-        candidate_cmds = _build_vlc_rc_commands(player_cmd, rc_port)
+        candidate_cmds = _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path)
         for cmd in candidate_cmds:
             logger.info(f"Trying VLC RC startup on {VLC_RC_HOST}:{rc_port} with cmd: {' '.join(cmd)}")
             vlc_controller_process = _stop_process(vlc_controller_process)
@@ -259,103 +258,26 @@ def _start_vlc_controller() -> bool:
 
 
 def _preload_playlist(video_items):
-    global playlist_item_ids
-    _send_vlc_command("stop")
-    _send_vlc_command("clear")
-    for _name, path in video_items:
+    # First video is already loaded as initial media when VLC starts.
+    for _name, path in video_items[1:]:
         _send_vlc_command(f"enqueue {_quote_path(path)}")
-        time.sleep(0.03)
-    _send_vlc_command("stop")
-
-    playlist_text = _send_vlc_command("playlist", timeout_seconds=1.0)
-
-    id_by_video_name = {}
-    lines = (playlist_text or "").splitlines()
-    for line in lines:
-        id_match = re.search(r"\b(\d+)\s*-", line)
-        if not id_match:
-            continue
-        try:
-            item_id = int(id_match.group(1))
-        except Exception:
-            continue
-
-        lowered_line = line.lower()
-        for video_name, _path in video_items:
-            if video_name.lower() in lowered_line and video_name not in id_by_video_name:
-                id_by_video_name[video_name] = item_id
-
-    if len(id_by_video_name) == len(video_items):
-        playlist_item_ids = [id_by_video_name[video_name] for video_name, _path in video_items]
-    else:
-        fallback_ids = []
-        for line in lines:
-            id_match = re.search(r"\b(\d+)\s*-", line)
-            if id_match:
-                try:
-                    fallback_ids.append(int(id_match.group(1)))
-                except Exception:
-                    continue
-        playlist_item_ids = fallback_ids[:len(video_items)]
-
-    if playlist_item_ids:
-        logger.info(f"Detected VLC playlist item IDs: {playlist_item_ids}")
-    else:
-        logger.warning("Could not parse VLC playlist item IDs")
+        time.sleep(0.05)
+    _send_vlc_command("loop on")
+    _send_vlc_command("seek 0")
+    _send_vlc_command("play")
+    logger.info("Preloaded remaining playlist entries and enabled loop mode")
 
 
-def _is_vlc_playing() -> bool:
-    is_playing_text = _send_vlc_command("is_playing", timeout_seconds=1.0).strip().lower()
-    if re.search(r"(^|\D)1($|\D)", is_playing_text):
-        return True
-
-    status = _send_vlc_command("status", timeout_seconds=1.0).lower()
-    if not status:
-        return False
-
-    if "state stopped" in status:
-        return False
-
-    for token in ("state playing", "state opening", "state buffering", "state paused"):
-        if token in status:
-            return True
-
-    return False
-
-
-def _switch_to_preloaded_index(index: int, name: str) -> bool:
+def _switch_to_preloaded_index(name: str) -> bool:
+    global current_playlist_index
     hide_terminal_window_linux()
-
-    sent_goto = False
-    if playlist_item_ids and index < len(playlist_item_ids):
-        playlist_id = playlist_item_ids[index]
-        _send_vlc_command(f"goto {playlist_id}")
-        sent_goto = True
-    else:
-        reply = _send_vlc_command(f"goto {index}")
-        sent_goto = bool(reply)
-
-    if not sent_goto:
-        logger.warning(f"RC goto failed for preloaded index {index}")
-        return False
-
+    _send_vlc_command("next")
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
     _send_vlc_command("fullscreen on")
-
-    deadline = time.time() + 2.5
-    ok = False
-    while time.time() < deadline:
-        if _is_vlc_playing():
-            ok = True
-            break
-        time.sleep(0.1)
-
-    if ok:
-        logger.info(f"Switched to: {name} (index {index})")
-    else:
-        logger.warning(f"RC switch did not enter playing state for: {name}")
-    return ok
+    current_playlist_index += 1
+    logger.info(f"Switched to: {name}")
+    return True
 
 
 def main():
@@ -386,7 +308,7 @@ def main():
     terminal_guard_thread.start()
 
     try:
-        use_rc = _start_vlc_controller()
+        use_rc = _start_vlc_controller(resolved_sequence[0][1])
         if not use_rc:
             logger.error("Could not start VLC RC controller")
             return
@@ -394,15 +316,17 @@ def main():
         _preload_playlist(resolved_sequence)
         logger.info("Preloaded all videos at startup")
 
-        index = 0
-        if resolved_sequence:
-            first_name, _first_path = resolved_sequence[0]
-            _switch_to_preloaded_index(0, first_name)
-            index = 1
+        first_name, _first_path = resolved_sequence[0]
+        _send_vlc_command("seek 0")
+        _send_vlc_command("play")
+        _send_vlc_command("fullscreen on")
+        logger.info(f"Started initial video: {first_name}")
+
+        index = 1
 
         while True:
             name, _path = resolved_sequence[index % len(resolved_sequence)]
-            switched = _switch_to_preloaded_index(index % len(resolved_sequence), name)
+            switched = _switch_to_preloaded_index(name)
             if not switched:
                 logger.warning("Switch failed; keeping current preloaded VLC session active")
             index += 1
