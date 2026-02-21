@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import sys
 import logging
+import pwd
 
 try:
     from pymodbus.client import ModbusTcpClient
@@ -29,14 +30,57 @@ log = logging.getLogger("vid_modbus")
 # ===============================
 # X11 ENV (MATCH vid_test)
 # ===============================
-os.environ["DISPLAY"] = ":0"
+os.environ["DISPLAY"] = os.environ.get("DISPLAY", ":0")
 os.environ["XDG_SESSION_TYPE"] = "x11"
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 
-home = os.path.expanduser("~")
-xauth = os.path.join(home, ".Xauthority")
-if os.path.exists(xauth):
-    os.environ["XAUTHORITY"] = xauth
+
+def _resolve_user_home(username: str):
+    try:
+        return pwd.getpwnam(username).pw_dir
+    except Exception:
+        return None
+
+
+def configure_x11_auth():
+    xauth_candidates = []
+
+    env_xauth = os.environ.get("XAUTHORITY")
+    if env_xauth:
+        xauth_candidates.append(env_xauth)
+
+    candidate_users = []
+    for key in ("SUDO_USER", "USER", "LOGNAME"):
+        value = os.environ.get(key)
+        if value and value not in candidate_users:
+            candidate_users.append(value)
+
+    # Prefer sudo-invoker desktop user when script is run with sudo.
+    for user in candidate_users:
+        home_dir = _resolve_user_home(user)
+        if home_dir:
+            xauth_candidates.append(os.path.join(home_dir, ".Xauthority"))
+
+    # Fallbacks
+    xauth_candidates.append(os.path.join(os.path.expanduser("~"), ".Xauthority"))
+    xauth_candidates.append("/home/pi/.Xauthority")
+    xauth_candidates.append("/home/helmwash/.Xauthority")
+
+    chosen = None
+    for path in xauth_candidates:
+        if path and os.path.exists(path):
+            chosen = path
+            break
+
+    if chosen:
+        os.environ["XAUTHORITY"] = chosen
+        log.info(f"X11 env: DISPLAY={os.environ.get('DISPLAY')} XAUTHORITY={chosen}")
+        print(f"X11 env: DISPLAY={os.environ.get('DISPLAY')} XAUTHORITY={chosen}")
+        return True
+
+    log.error("No usable .Xauthority found for GUI session")
+    print("No usable .Xauthority found for GUI session")
+    return False
 
 # ===============================
 # CONFIG
@@ -379,6 +423,11 @@ def read_coils():
 def main():
     log.info("Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)")
     print("Starting vid_modbus...")
+    print(f"Runtime user info: uid={os.getuid()} user={os.environ.get('USER')} sudo_user={os.environ.get('SUDO_USER')}")
+
+    if not configure_x11_auth():
+        print("Startup aborted: no X11 authorization available")
+        return
 
     global AVAILABLE_VIDEO_PATHS
     AVAILABLE_VIDEO_PATHS = {}
