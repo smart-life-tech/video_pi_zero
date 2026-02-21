@@ -15,6 +15,10 @@ import re
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     os.environ.setdefault("XDG_SESSION_TYPE", "x11")
+    os.environ.setdefault("DISPLAY", ":0")
+    home_auth = os.path.join(os.path.expanduser("~"), ".Xauthority")
+    if os.path.exists(home_auth):
+        os.environ.setdefault("XAUTHORITY", home_auth)
 
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_vid_test.log")
 logging.basicConfig(
@@ -280,7 +284,12 @@ def _preload_playlist(video_paths):
         logger.warning("Could not parse VLC playlist item IDs; switch will use fallback path")
 
 
-def _switch_to_preloaded_index(index: int, name: str, path: str):
+def _is_vlc_playing() -> bool:
+    status = _send_vlc_command("status", timeout_seconds=1.0).lower()
+    return "state playing" in status
+
+
+def _switch_to_preloaded_index(index: int, name: str, path: str) -> bool:
     hide_terminal_window_linux()
 
     sent_goto = False
@@ -300,7 +309,13 @@ def _switch_to_preloaded_index(index: int, name: str, path: str):
 
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
-    logger.info(f"Switched to: {name} (index {index})")
+    time.sleep(0.25)
+    ok = _is_vlc_playing()
+    if ok:
+        logger.info(f"Switched to: {name} (index {index})")
+    else:
+        logger.warning(f"RC switch did not enter playing state for: {name}")
+    return ok
 
 
 def _play_video_direct(path: str, name: str):
@@ -365,7 +380,11 @@ def main():
         while True:
             name, path = resolved_sequence[index % len(resolved_sequence)]
             if use_rc:
-                _switch_to_preloaded_index(index % len(resolved_sequence), name, path)
+                switched = _switch_to_preloaded_index(index % len(resolved_sequence), name, path)
+                if not switched:
+                    logger.warning("Falling back to direct playback mode")
+                    use_rc = False
+                    _play_video_direct(path, name)
             else:
                 _play_video_direct(path, name)
             index += 1
