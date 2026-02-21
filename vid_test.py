@@ -237,6 +237,16 @@ def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
     return commands
 
 
+def _wait_for_vlc_playing(timeout_seconds: float = 3.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        state = _send_vlc_command("is_playing", timeout_seconds=0.8).strip().lower()
+        if "1" in state:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def _start_vlc_controller(initial_media_path: str) -> bool:
     global vlc_controller_process, vlc_rc_port_in_use
     player_cmd = _get_vlc_player_cmd()
@@ -256,8 +266,20 @@ def _start_vlc_controller(initial_media_path: str) -> bool:
             vlc_controller_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             vlc_rc_port_in_use = rc_port
             if _wait_for_vlc_rc():
-                logger.info(f"VLC RC controller started on {VLC_RC_HOST}:{vlc_rc_port_in_use}")
-                return True
+                # Candidate is considered valid only if playback can actually start.
+                _send_vlc_command("stop")
+                _send_vlc_command("clear")
+                _send_vlc_command(f"add {_quote_path(initial_media_path)}")
+                _send_vlc_command("seek 0")
+                _send_vlc_command("play")
+                _send_vlc_command("fullscreen on")
+                if _wait_for_vlc_playing(timeout_seconds=3.5):
+                    logger.info(f"VLC RC controller started on {VLC_RC_HOST}:{vlc_rc_port_in_use}")
+                    return True
+
+                logger.warning(
+                    f"RC connected but playback did not start for cmd: {' '.join(cmd)}"
+                )
 
     vlc_controller_process = _stop_process(vlc_controller_process)
     logger.error("VLC RC startup failed for all command/port candidates")
