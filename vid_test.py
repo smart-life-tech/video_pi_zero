@@ -101,23 +101,30 @@ def hide_terminal_window_linux():
     if not sys.platform.startswith("linux"):
         return
 
-    quick_cmds = [
-        ["xdotool", "getactivewindow", "windowminimize"],
-        ["wmctrl", "-r", ":ACTIVE:", "-b", "add,hidden"],
-    ]
-    for cmd in quick_cmds:
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=False)
-        except Exception:
-            pass
-
     if shutil.which("xdotool") is None:
         return
 
+    # Minimize only known terminal windows; never minimize the active window blindly
+    # because VLC can be active during playback.
     for class_name in TERMINAL_WINDOW_CLASSES:
         try:
             result = subprocess.run(
                 ["xdotool", "search", "--onlyvisible", "--class", class_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowminimize", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            continue
+
+    # Extra fallback by window title tokens for terminal apps that do not expose expected class.
+    for token in ("Terminal", "LXTerminal", "xterm", "bash", "zsh"):
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--onlyvisible", "--name", token],
                 capture_output=True,
                 text=True,
                 check=False,
