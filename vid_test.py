@@ -285,7 +285,19 @@ def _preload_playlist(video_paths):
 
 def _is_vlc_playing() -> bool:
     status = _send_vlc_command("status", timeout_seconds=1.0).lower()
-    return "state playing" in status
+    if not status:
+        return _can_connect_vlc_rc()
+
+    if "state stopped" in status:
+        return False
+
+    for token in ("state playing", "state opening", "state buffering", "state paused"):
+        if token in status:
+            return True
+
+    # Some VLC builds return non-standard status text; if RC is alive and not explicitly stopped,
+    # treat as active to avoid false-negative switch failures.
+    return _can_connect_vlc_rc()
 
 
 def _switch_to_preloaded_index(index: int, name: str) -> bool:
@@ -307,8 +319,15 @@ def _switch_to_preloaded_index(index: int, name: str) -> bool:
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
     _send_vlc_command("fullscreen on")
-    time.sleep(0.25)
-    ok = _is_vlc_playing()
+
+    deadline = time.time() + 2.5
+    ok = False
+    while time.time() < deadline:
+        if _is_vlc_playing():
+            ok = True
+            break
+        time.sleep(0.1)
+
     if ok:
         logger.info(f"Switched to: {name} (index {index})")
     else:
