@@ -273,11 +273,17 @@ def _force_vlc_window_fullscreen_linux(process_handle):
             time.sleep(0.1)
 
 
-def _post_launch_fix_vlc_window(process_handle):
+def _post_launch_fix_vlc_window(process_handle, delay_seconds=0.0):
     """Run fullscreen/decorations fix asynchronously after VLC spawn."""
     if not sys.platform.startswith("linux"):
         return
-    threading.Thread(target=_force_vlc_window_fullscreen_linux, args=(process_handle,), daemon=True).start()
+
+    def _delayed_fix():
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        _force_vlc_window_fullscreen_linux(process_handle)
+
+    threading.Thread(target=_delayed_fix, daemon=True).start()
 
 
 def _prepare_transition_cover_locked():
@@ -542,6 +548,7 @@ def _play_trigger_once_locked(video_file):
             return
 
         # Any non-guide trigger cancels idle guide mode until guide is explicitly requested again.
+        is_guide_to_step1 = idle_guide_active and video_file == "Process_step_1.mp4"
         idle_mode_requested = False
 
         # Keep black cover visible before and during transition.
@@ -558,7 +565,11 @@ def _play_trigger_once_locked(video_file):
             video_path,
         ]
         new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _post_launch_fix_vlc_window(new_trigger)
+        if is_guide_to_step1:
+            # Keep black transition cover on top briefly to hide early partial-frame flash.
+            _post_launch_fix_vlc_window(new_trigger, delay_seconds=0.22)
+        else:
+            _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
         previous_trigger = _stop_process_locked(previous_trigger)
     trigger_video_active = True
