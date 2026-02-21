@@ -258,35 +258,60 @@ def _start_vlc_controller() -> bool:
     return False
 
 
-def _preload_playlist(video_paths):
+def _preload_playlist(video_items):
     global playlist_item_ids
     _send_vlc_command("stop")
     _send_vlc_command("clear")
-    for path in video_paths:
+    for _name, path in video_items:
         _send_vlc_command(f"enqueue {_quote_path(path)}")
         time.sleep(0.03)
     _send_vlc_command("stop")
 
     playlist_text = _send_vlc_command("playlist", timeout_seconds=1.0)
-    ids = []
-    for line in (playlist_text or "").splitlines():
-        match = re.search(r"\b-\s*(\d+)\s*-", line)
-        if match:
-            try:
-                ids.append(int(match.group(1)))
-            except Exception:
-                continue
-    playlist_item_ids = ids
+
+    id_by_video_name = {}
+    lines = (playlist_text or "").splitlines()
+    for line in lines:
+        id_match = re.search(r"\b(\d+)\s*-", line)
+        if not id_match:
+            continue
+        try:
+            item_id = int(id_match.group(1))
+        except Exception:
+            continue
+
+        lowered_line = line.lower()
+        for video_name, _path in video_items:
+            if video_name.lower() in lowered_line and video_name not in id_by_video_name:
+                id_by_video_name[video_name] = item_id
+
+    if len(id_by_video_name) == len(video_items):
+        playlist_item_ids = [id_by_video_name[video_name] for video_name, _path in video_items]
+    else:
+        fallback_ids = []
+        for line in lines:
+            id_match = re.search(r"\b(\d+)\s*-", line)
+            if id_match:
+                try:
+                    fallback_ids.append(int(id_match.group(1)))
+                except Exception:
+                    continue
+        playlist_item_ids = fallback_ids[:len(video_items)]
+
     if playlist_item_ids:
         logger.info(f"Detected VLC playlist item IDs: {playlist_item_ids}")
     else:
-        logger.warning("Could not parse VLC playlist item IDs; switch will use fallback path")
+        logger.warning("Could not parse VLC playlist item IDs")
 
 
 def _is_vlc_playing() -> bool:
+    is_playing_text = _send_vlc_command("is_playing", timeout_seconds=1.0).strip().lower()
+    if re.search(r"(^|\D)1($|\D)", is_playing_text):
+        return True
+
     status = _send_vlc_command("status", timeout_seconds=1.0).lower()
     if not status:
-        return _can_connect_vlc_rc()
+        return False
 
     if "state stopped" in status:
         return False
@@ -295,9 +320,7 @@ def _is_vlc_playing() -> bool:
         if token in status:
             return True
 
-    # Some VLC builds return non-standard status text; if RC is alive and not explicitly stopped,
-    # treat as active to avoid false-negative switch failures.
-    return _can_connect_vlc_rc()
+    return False
 
 
 def _switch_to_preloaded_index(index: int, name: str) -> bool:
@@ -368,10 +391,15 @@ def main():
             logger.error("Could not start VLC RC controller")
             return
 
-        _preload_playlist([path for _, path in resolved_sequence])
+        _preload_playlist(resolved_sequence)
         logger.info("Preloaded all videos at startup")
 
         index = 0
+        if resolved_sequence:
+            first_name, _first_path = resolved_sequence[0]
+            _switch_to_preloaded_index(0, first_name)
+            index = 1
+
         while True:
             name, _path = resolved_sequence[index % len(resolved_sequence)]
             switched = _switch_to_preloaded_index(index % len(resolved_sequence), name)
