@@ -21,18 +21,17 @@ logging.basicConfig(
 log = logging.getLogger("vid_test")
 
 # ===============================
-# X11 ENV — ABSOLUTELY REQUIRED
+# X11 ENV (REQUIRED)
 # ===============================
 os.environ["DISPLAY"] = ":0"
 
 home = os.path.expanduser("~")
 xauth = os.path.join(home, ".Xauthority")
-if os.path.exists(xauth):
-    os.environ["XAUTHORITY"] = xauth
-else:
-    log.error("Missing .Xauthority — VLC cannot open X window")
+if not os.path.exists(xauth):
+    log.error("Missing .Xauthority")
     sys.exit(1)
 
+os.environ["XAUTHORITY"] = xauth
 os.environ["XDG_SESSION_TYPE"] = "x11"
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 
@@ -76,9 +75,9 @@ def wait_for_rc(timeout=6):
 
 
 # ===============================
-# START VLC (SINGLE WINDOW)
+# START VLC (NO MEDIA!)
 # ===============================
-def start_vlc(first_video):
+def start_vlc():
     if not shutil.which("cvlc"):
         log.error("cvlc not installed")
         sys.exit(1)
@@ -90,33 +89,30 @@ def start_vlc(first_video):
         "--rc-host", f"{RC_HOST}:{RC_PORT}",
 
         "--vout", "x11",
+        "--avcodec-hw=none",
         "--fullscreen",
         "--video-on-top",
         "--no-video-title-show",
         "--no-osd",
         "--no-audio",
-
-        first_video,
     ]
 
     log.info("Launching VLC:")
     log.info(" ".join(cmd))
 
-    proc = subprocess.Popen(
+    subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env=os.environ.copy(),
+        start_new_session=True,
     )
 
     if not wait_for_rc():
-        err = proc.stderr.read().decode(errors="ignore")
-        log.error("VLC failed to start RC interface")
-        log.error(err)
-        proc.terminate()
+        log.error("VLC RC not responding")
         sys.exit(1)
 
-    log.info("VLC RC connected successfully")
+    log.info("VLC RC connected")
 
 
 # ===============================
@@ -134,32 +130,39 @@ def main():
             log.warning(f"Missing video: {p}")
 
     if not video_paths:
-        log.error("No videos found — exiting")
+        log.error("No valid videos")
         return
 
-    start_vlc(video_paths[0])
+    # Start VLC WITHOUT media
+    start_vlc()
 
-    rc("stop")
+    # Build playlist deterministically
     rc("clear")
-    rc("loop on")
+    rc("loop off")
     rc("random off")
 
     for v in video_paths:
-        rc(f"enqueue {v}")
+        rc(f"add {v}")
+        time.sleep(0.05)
 
+    # Start first video explicitly
+    current_index = 0
+    rc(f"goto {current_index}")
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
 
-    log.info("Playback started")
+    log.info(f"Playing index {current_index}")
 
+    # Deterministic switching
     while True:
         time.sleep(SWITCH_INTERVAL)
-        rc("next")
+        current_index = (current_index + 1) % len(video_paths)
+        rc(f"goto {current_index}")
         rc("seek 0")
         rc("play")
         rc("fullscreen on")
-        log.info("Switched video")
+        log.info(f"Switched to index {current_index}")
 
 
 if __name__ == "__main__":
