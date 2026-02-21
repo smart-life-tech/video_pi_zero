@@ -624,7 +624,14 @@ def _play_trigger_once_locked(video_file):
         # Keep black cover visible before and during transition.
         _prepare_transition_cover_locked()
 
-        previous_trigger = trigger_vlc_process
+        # Tear down any previous trigger process before starting the new one.
+        # This prevents stale-frame leaks (e.g., Warning loop flash) during guide -> step1 handoff.
+        if trigger_vlc_process is not None and trigger_vlc_process.poll() is None:
+            trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
+            if black_vlc_process is not None and black_vlc_process.poll() is None:
+                _raise_vlc_windows_for_pid_linux(black_vlc_process)
+            time.sleep(0.08)
+
         if is_warning_target:
             cmd = player_cmd + _vlc_fullscreen_base_args() + [
                 "--loop",
@@ -671,7 +678,6 @@ def _play_trigger_once_locked(video_file):
             new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _post_launch_fix_vlc_window(new_trigger)
         trigger_vlc_process = new_trigger
-        previous_trigger = _stop_process_locked(previous_trigger)
     trigger_video_active = True
     idle_guide_active = False
     last_requested_video = video_file
