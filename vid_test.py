@@ -241,6 +241,7 @@ def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
         "--no-qt-fs-controller",
         "--quiet",
         "--no-audio",
+        "--avcodec-hw=none",
     ]
 
     commands = []
@@ -248,19 +249,6 @@ def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
         player_cmd
         + common_video_args
         + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
-    )
-
-    base_exec = player_cmd[0]
-    commands.append(
-        [base_exec, "-I", "rc"]
-        + common_video_args
-        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
-    )
-
-    commands.append(
-        [base_exec, "-I", "rc"]
-        + common_video_args
-        + ["--rc-host", f"{VLC_RC_HOST}:{rc_port}", "--rc-fake-tty", initial_media_path]
     )
 
     return commands
