@@ -11,6 +11,7 @@ import subprocess
 import queue
 import shutil
 import socket
+import urllib.parse
 
 # Improve VLC stability on Raspberry Pi/Wayland by preferring X11-compatible backend.
 if sys.platform.startswith("linux"):
@@ -442,7 +443,7 @@ def _send_vlc_command_locked(command):
         return ""
 
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.settimeout(0.35)
+    client.settimeout(0.8)
     try:
         client.connect((VLC_RC_HOST, VLC_RC_PORT))
         client.sendall((command + "\n").encode("utf-8", errors="ignore"))
@@ -495,6 +496,39 @@ def _run_vlc_commands_locked(commands, delay_seconds=0.06):
     for cmd in commands:
         _send_vlc_command_locked(cmd)
         time.sleep(delay_seconds)
+
+
+def _to_vlc_file_uri(path_value):
+    absolute = os.path.abspath(path_value)
+    return "file://" + urllib.parse.quote(absolute)
+
+
+def _rc_play_media_locked(video_path, loop_enabled):
+    """Play media in RC mode with fallback add syntax. Caller must hold video_process_lock."""
+    repeat_cmd = "repeat on" if loop_enabled else "repeat off"
+    normalized_path = os.path.abspath(video_path)
+
+    def _attempt_play(target_path):
+        _run_vlc_commands_locked([
+            "stop",
+            "clear",
+            repeat_cmd,
+            "loop off",
+            f"add {target_path}",
+            "seek 0",
+            "play",
+            "fullscreen on",
+        ], delay_seconds=0.08)
+
+    _attempt_play(normalized_path)
+    time.sleep(0.25)
+    if _vlc_state_locked() == "playing":
+        return True
+
+    # Fallback for environments that require URI-style add path.
+    _attempt_play(_to_vlc_file_uri(normalized_path))
+    time.sleep(0.25)
+    return _vlc_state_locked() == "playing"
 
 
 def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
@@ -616,29 +650,11 @@ def _play_idle_guide_locked():
         return
 
     if USE_VLC_RC_CONTROL:
-        _run_vlc_commands_locked([
-            "stop",
-            "clear",
-            "repeat on",
-            "loop off",
-            f"add {_quote_vlc_path(guide_path)}",
-            "play",
-        ])
-
-        # Verify idle playback is really running; recover once if not.
-        time.sleep(0.2)
-        if _vlc_state_locked() != "playing":
+        if not _rc_play_media_locked(guide_path, loop_enabled=True):
             logger.warning("Idle guide did not enter playing state, restarting VLC controller")
             _stop_external_vlc_locked()
             if _ensure_external_vlc_running_locked():
-                _run_vlc_commands_locked([
-                    "stop",
-                    "clear",
-                    "repeat on",
-                    "loop off",
-                    f"add {_quote_vlc_path(guide_path)}",
-                    "play",
-                ])
+                _rc_play_media_locked(guide_path, loop_enabled=True)
     else:
         player_cmd = _get_vlc_player_cmd()
         if player_cmd is None:
@@ -671,30 +687,11 @@ def _play_trigger_once_locked(video_file):
     is_warning_target = video_file == "Warning.mp4"
 
     if USE_VLC_RC_CONTROL:
-        repeat_mode_cmd = "repeat on" if is_warning_target else "repeat off"
-        _run_vlc_commands_locked([
-            "stop",
-            "clear",
-            repeat_mode_cmd,
-            "loop off",
-            f"add {_quote_vlc_path(video_path)}",
-            "play",
-        ])
-
-        # Verify trigger playback is really active; restart and retry once if needed.
-        time.sleep(0.25)
-        if _vlc_state_locked() != "playing":
+        if not _rc_play_media_locked(video_path, loop_enabled=is_warning_target):
             logger.warning(f"Trigger switch failed for {video_file}, restarting VLC and retrying")
             _stop_external_vlc_locked()
             if _ensure_external_vlc_running_locked():
-                _run_vlc_commands_locked([
-                    "stop",
-                    "clear",
-                    repeat_mode_cmd,
-                    "loop off",
-                    f"add {_quote_vlc_path(video_path)}",
-                    "play",
-                ])
+                _rc_play_media_locked(video_path, loop_enabled=is_warning_target)
     else:
         player_cmd = _get_vlc_player_cmd()
         if player_cmd is None:
