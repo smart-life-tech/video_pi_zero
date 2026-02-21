@@ -640,7 +640,7 @@ def _play_trigger_once_locked(video_file):
                     daemon=True,
                 ).start()
             # Let black settle on top before creating step1 window to prevent first-frame leak.
-            time.sleep(1)
+            # time.sleep(1)
             new_trigger = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _post_launch_fix_vlc_window(new_trigger, delay_seconds=step1_cover_hold_seconds)
         else:
