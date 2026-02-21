@@ -21,19 +21,18 @@ logging.basicConfig(
 log = logging.getLogger("vid_test")
 
 # ===============================
-# X11 ENV (REQUIRED)
+# X11 ENV (MANDATORY)
 # ===============================
 os.environ["DISPLAY"] = ":0"
+os.environ["XDG_SESSION_TYPE"] = "x11"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 home = os.path.expanduser("~")
 xauth = os.path.join(home, ".Xauthority")
 if not os.path.exists(xauth):
     log.error("Missing .Xauthority")
     sys.exit(1)
-
 os.environ["XAUTHORITY"] = xauth
-os.environ["XDG_SESSION_TYPE"] = "x11"
-os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 # ===============================
 # CONFIG
@@ -55,14 +54,14 @@ RC_PORT = 4215
 # ===============================
 def rc(cmd):
     try:
-        s = socket.create_connection((RC_HOST, RC_PORT), timeout=0.4)
+        s = socket.create_connection((RC_HOST, RC_PORT), timeout=0.5)
         s.sendall((cmd + "\n").encode())
         s.close()
     except Exception:
         pass
 
 
-def wait_for_rc(timeout=6):
+def wait_for_rc(timeout=8):
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -75,9 +74,9 @@ def wait_for_rc(timeout=6):
 
 
 # ===============================
-# START VLC (NO MEDIA!)
+# START VLC (WITH DUMMY MEDIA)
 # ===============================
-def start_vlc():
+def start_vlc(dummy_video):
     if not shutil.which("cvlc"):
         log.error("cvlc not installed")
         sys.exit(1)
@@ -90,11 +89,15 @@ def start_vlc():
 
         "--vout", "x11",
         "--avcodec-hw=none",
+        "--video-x", "0",
+        "--video-y", "0",
         "--fullscreen",
         "--video-on-top",
         "--no-video-title-show",
         "--no-osd",
         "--no-audio",
+
+        dummy_video,   # <<< CRITICAL
     ]
 
     log.info("Launching VLC:")
@@ -133,10 +136,11 @@ def main():
         log.error("No valid videos")
         return
 
-    # Start VLC WITHOUT media
-    start_vlc()
+    # Start VLC WITH FIRST VIDEO
+    start_vlc(video_paths[0])
 
-    # Build playlist deterministically
+    # Rebuild playlist cleanly
+    rc("stop")
     rc("clear")
     rc("loop off")
     rc("random off")
@@ -145,24 +149,22 @@ def main():
         rc(f"add {v}")
         time.sleep(0.05)
 
-    # Start first video explicitly
-    current_index = 0
-    rc(f"goto {current_index}")
+    current = 0
+    rc(f"goto {current}")
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
 
-    log.info(f"Playing index {current_index}")
+    log.info(f"Playing index {current}")
 
-    # Deterministic switching
     while True:
         time.sleep(SWITCH_INTERVAL)
-        current_index = (current_index + 1) % len(video_paths)
-        rc(f"goto {current_index}")
+        current = (current + 1) % len(video_paths)
+        rc(f"goto {current}")
         rc("seek 0")
         rc("play")
         rc("fullscreen on")
-        log.info(f"Switched to index {current_index}")
+        log.info(f"Switched to index {current}")
 
 
 if __name__ == "__main__":
