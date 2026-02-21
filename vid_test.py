@@ -43,6 +43,11 @@ TERMINAL_GUARD_INTERVAL_SECONDS = float(os.environ.get("VID_TEST_TERMINAL_GUARD_
 VLC_RC_HOST = os.environ.get("VID_TEST_VLC_RC_HOST", "127.0.0.1")
 VLC_RC_PORT = int(os.environ.get("VID_TEST_VLC_RC_PORT", "4215"))
 VLC_RC_PORT_FALLBACK_COUNT = int(os.environ.get("VID_TEST_VLC_RC_PORT_FALLBACK_COUNT", "4"))
+VLC_VOUT_CANDIDATES = [
+    value.strip()
+    for value in os.environ.get("VID_TEST_VOUT_CANDIDATES", "mmal_vout,kms,xcb_x11,glx,any").split(",")
+    if value.strip()
+]
 
 terminal_guard_running = False
 vlc_controller_process = None
@@ -233,23 +238,29 @@ def _quote_path(path_value: str) -> str:
 
 
 def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
-    common_video_args = [
-        "--fullscreen",
-        "--video-on-top",
-        "--no-video-title-show",
-        "--no-video-deco",
-        "--no-qt-fs-controller",
-        "--quiet",
-        "--no-audio",
-        "--avcodec-hw=none",
-    ]
-
     commands = []
-    commands.append(
-        player_cmd
-        + common_video_args
-        + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
-    )
+    for vout_name in VLC_VOUT_CANDIDATES:
+        common_video_args = [
+            "--fullscreen",
+            "--video-on-top",
+            "--no-video-title-show",
+            "--no-video-deco",
+            "--no-qt-fs-controller",
+            "--quiet",
+            "--no-audio",
+        ]
+
+        # Try hardware acceleration first, then software decode for each vout backend.
+        decode_variants = [[], ["--avcodec-hw=none"]]
+        for decode_args in decode_variants:
+            vout_args = [] if vout_name == "any" else [f"--vout={vout_name}"]
+            commands.append(
+                player_cmd
+                + common_video_args
+                + decode_args
+                + vout_args
+                + ["--extraintf", "rc", "--rc-host", f"{VLC_RC_HOST}:{rc_port}", initial_media_path]
+            )
 
     return commands
 
