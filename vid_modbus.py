@@ -570,11 +570,14 @@ def _play_trigger_once_locked(video_file):
         print(f"Error: Video file not found: {video_path}")
         return
 
+    is_warning_target = video_file == "Warning.mp4"
+
     if USE_VLC_RC_CONTROL:
+        repeat_mode_cmd = "repeat on" if is_warning_target else "repeat off"
         _run_vlc_commands_locked([
             "stop",
             "clear",
-            "repeat off",
+            repeat_mode_cmd,
             "loop off",
             f"add {_quote_vlc_path(video_path)}",
             "play",
@@ -589,7 +592,7 @@ def _play_trigger_once_locked(video_file):
                 _run_vlc_commands_locked([
                     "stop",
                     "clear",
-                    "repeat off",
+                    repeat_mode_cmd,
                     "loop off",
                     f"add {_quote_vlc_path(video_path)}",
                     "play",
@@ -622,11 +625,18 @@ def _play_trigger_once_locked(video_file):
         _prepare_transition_cover_locked()
 
         previous_trigger = trigger_vlc_process
-        cmd = player_cmd + _vlc_fullscreen_base_args() + [
-            "--play-and-exit",
-            "--no-audio",
-            video_path,
-        ]
+        if is_warning_target:
+            cmd = player_cmd + _vlc_fullscreen_base_args() + [
+                "--loop",
+                "--no-audio",
+                video_path,
+            ]
+        else:
+            cmd = player_cmd + _vlc_fullscreen_base_args() + [
+                "--play-and-exit",
+                "--no-audio",
+                video_path,
+            ]
         new_trigger = None
         if is_step1_target:
             logger.info("Applying step1 black-cover hold path")
@@ -665,8 +675,12 @@ def _play_trigger_once_locked(video_file):
     trigger_video_active = True
     idle_guide_active = False
     last_requested_video = video_file
-    logger.info(f"Rising-edge switch complete: {video_file}")
-    print(f"Rising-edge switch complete: {video_file}")
+    if is_warning_target:
+        logger.info(f"Rising-edge switch complete (loop mode): {video_file}")
+        print(f"Rising-edge switch complete (loop mode): {video_file}")
+    else:
+        logger.info(f"Rising-edge switch complete: {video_file}")
+        print(f"Rising-edge switch complete: {video_file}")
 
 
 def _vlc_state_locked():
