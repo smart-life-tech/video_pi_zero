@@ -186,7 +186,7 @@ guide_vlc_process = None
 trigger_vlc_process = None
 black_vlc_process = None
 USE_EXTERNAL_VLC = sys.platform.startswith("linux")
-USE_VLC_RC_CONTROL = False
+USE_VLC_RC_CONTROL = sys.platform.startswith("linux")
 VLC_RC_HOST = "127.0.0.1"
 VLC_RC_PORT = 4213
 vlc_supervisor_running = False
@@ -469,7 +469,25 @@ def _send_vlc_command_locked(command):
 
 def _quote_vlc_path(path_value):
     """Quote path for VLC RC commands."""
-    return '"' + path_value.replace('"', '\\"') + '"'
+    return path_value
+
+
+def _can_connect_vlc_rc_locked():
+    """Check RC TCP socket availability. Caller must hold video_process_lock."""
+    if not USE_VLC_RC_CONTROL:
+        return False
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.settimeout(0.45)
+    try:
+        client.connect((VLC_RC_HOST, VLC_RC_PORT))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _run_vlc_commands_locked(commands, delay_seconds=0.06):
@@ -488,7 +506,7 @@ def _wait_for_vlc_socket_locked(timeout_seconds=4.0):
     while time.time() < deadline:
         if guide_vlc_process and guide_vlc_process.poll() is not None:
             return False
-        if _send_vlc_command_locked("status"):
+        if _can_connect_vlc_rc_locked() or _send_vlc_command_locked("status"):
             return True
         time.sleep(0.1)
     return False
@@ -501,6 +519,38 @@ def _ensure_external_vlc_running_locked():
         logger.error("Neither 'cvlc' nor 'vlc' command is available")
         print("Error: Install VLC command-line player (cvlc) on Pi.")
         return False
+
+    if not USE_VLC_RC_CONTROL:
+        return True
+
+    global guide_vlc_process
+
+    # Keep one persistent VLC RC process alive for smooth in-process switching.
+    if guide_vlc_process is not None and guide_vlc_process.poll() is None:
+        if _wait_for_vlc_socket_locked(timeout_seconds=1.0):
+            return True
+        guide_vlc_process = _stop_process_locked(guide_vlc_process)
+
+    guide_path = resolve_video_path("Guide_steps.mp4")
+
+    cmd = player_cmd + _vlc_fullscreen_base_args() + [
+        "--intf", "dummy",
+        "--extraintf", "rc",
+        "--rc-host", f"{VLC_RC_HOST}:{VLC_RC_PORT}",
+        "--vout", "x11",
+        "--avcodec-hw=none",
+        "--no-audio",
+    ]
+
+    if os.path.exists(guide_path):
+        cmd.append(guide_path)
+
+    guide_vlc_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not _wait_for_vlc_socket_locked(timeout_seconds=6.0):
+        guide_vlc_process = _stop_process_locked(guide_vlc_process)
+        logger.error("VLC RC controller did not become ready")
+        return False
+
     return True
 
 
@@ -508,12 +558,19 @@ def _stop_external_vlc_locked():
     """Stop existing external VLC process. Caller must hold video_process_lock."""
     global guide_vlc_process, trigger_vlc_process, black_vlc_process
     guide_vlc_process = _stop_process_locked(guide_vlc_process)
-    trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
-    black_vlc_process = _stop_process_locked(black_vlc_process)
+    if USE_VLC_RC_CONTROL:
+        trigger_vlc_process = None
+        black_vlc_process = None
+    else:
+        trigger_vlc_process = _stop_process_locked(trigger_vlc_process)
+        black_vlc_process = _stop_process_locked(black_vlc_process)
 
 
 def _ensure_black_screen_loop_locked():
     """Ensure persistent black fullscreen process is running."""
+    if USE_VLC_RC_CONTROL:
+        return
+
     global black_vlc_process
 
     if black_vlc_process is not None and black_vlc_process.poll() is None:
