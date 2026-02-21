@@ -906,6 +906,18 @@ def handle_modbus_trigger(action_name):
     """Handle a Modbus trigger by playing the appropriate video"""
     if can_trigger_action(action_name):
         video_file = VIDEO_FILES[action_name]
+
+        # Ignore duplicate trigger for the same video while it is already active.
+        with video_process_lock:
+            duplicate_active_trigger = (
+                trigger_video_active
+                and last_requested_video == video_file
+            )
+        if duplicate_active_trigger:
+            logger.info(f"Ignoring duplicate active trigger: {action_name} -> {video_file}")
+            print(f"  -> Ignored duplicate trigger (already active): {video_file}")
+            return
+
         logger.info(f"Modbus trigger: {action_name} -> {video_file}")
         print(f"  -> Playing video: {video_file}")
         queue_video_play(video_file)
