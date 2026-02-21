@@ -42,6 +42,7 @@ VLC_RC_PORT_FALLBACK_COUNT = int(os.environ.get("VID_TEST_VLC_RC_PORT_FALLBACK_C
 
 terminal_guard_running = False
 vlc_controller_process = None
+direct_video_process = None
 vlc_rc_port_in_use = VLC_RC_PORT
 TERMINAL_WINDOW_CLASSES = [
     "lxterminal",
@@ -253,8 +254,31 @@ def _switch_to_preloaded_index(index: int, name: str):
     logger.info(f"Switched to: {name} (index {index})")
 
 
+def _play_video_direct(path: str, name: str):
+    global direct_video_process
+    player_cmd = _get_vlc_player_cmd()
+    if player_cmd is None:
+        logger.error("Neither 'cvlc' nor 'vlc' command is available")
+        return
+
+    direct_video_process = _stop_process(direct_video_process)
+    cmd = player_cmd + [
+        "--fullscreen",
+        "--video-on-top",
+        "--no-video-title-show",
+        "--no-video-deco",
+        "--no-qt-fs-controller",
+        "--quiet",
+        "--no-audio",
+        "--play-and-exit",
+        path,
+    ]
+    direct_video_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    logger.info(f"Direct playback: {name}")
+
+
 def main():
-    global terminal_guard_running, vlc_controller_process
+    global terminal_guard_running, vlc_controller_process, direct_video_process
 
     logger.info("=== Timed Video Test Started ===")
     logger.info(f"Switch interval: {SWITCH_INTERVAL_SECONDS}s")
@@ -281,17 +305,20 @@ def main():
     terminal_guard_thread.start()
 
     try:
-        if not _start_vlc_controller():
-            logger.error("Could not start VLC RC controller")
-            return
-
-        _preload_playlist([path for _, path in resolved_sequence])
-        logger.info("Preloaded all videos at startup")
+        use_rc = _start_vlc_controller()
+        if not use_rc:
+            logger.warning("Could not start VLC RC controller; using direct playback fallback")
+        else:
+            _preload_playlist([path for _, path in resolved_sequence])
+            logger.info("Preloaded all videos at startup")
 
         index = 0
         while True:
-            name, _path = resolved_sequence[index % len(resolved_sequence)]
-            _switch_to_preloaded_index(index % len(resolved_sequence), name)
+            name, path = resolved_sequence[index % len(resolved_sequence)]
+            if use_rc:
+                _switch_to_preloaded_index(index % len(resolved_sequence), name)
+            else:
+                _play_video_direct(path, name)
             index += 1
             time.sleep(SWITCH_INTERVAL_SECONDS)
 
@@ -305,6 +332,7 @@ def main():
             pass
 
         vlc_controller_process = _stop_process(vlc_controller_process)
+        direct_video_process = _stop_process(direct_video_process)
         logger.info("vid_test shutdown complete")
 
 
