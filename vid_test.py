@@ -229,7 +229,7 @@ def _wait_for_vlc_rc(timeout_seconds: float = 10.0) -> bool:
 
 
 def _quote_path(path_value: str) -> str:
-    return '"' + path_value.replace('"', '\\"') + '"'
+    return path_value
 
 
 def _build_vlc_rc_commands(player_cmd, rc_port, initial_media_path):
