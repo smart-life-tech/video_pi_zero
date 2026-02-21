@@ -258,14 +258,34 @@ def _start_vlc_controller(initial_media_path: str) -> bool:
 
 
 def _preload_playlist(video_items):
-    # First video is already loaded as initial media when VLC starts.
+    if not video_items:
+        return
+
+    first_name, first_path = video_items[0]
+
+    # Rebuild playlist explicitly in RC to ensure predictable ordering.
+    _send_vlc_command("stop")
+    _send_vlc_command("clear")
+    _send_vlc_command("repeat off")
+    _send_vlc_command("loop on")
+    _send_vlc_command("random off")
+
+    _send_vlc_command(f"add {_quote_path(first_path)}")
+    time.sleep(0.12)
+
     for _name, path in video_items[1:]:
         _send_vlc_command(f"enqueue {_quote_path(path)}")
         time.sleep(0.05)
-    _send_vlc_command("loop on")
+
+    playlist_text = _send_vlc_command("playlist", timeout_seconds=1.2)
+    if playlist_text:
+        logger.info("VLC playlist rebuilt successfully")
+    else:
+        logger.warning("VLC playlist output empty after rebuild")
+
     _send_vlc_command("seek 0")
     _send_vlc_command("play")
-    logger.info("Preloaded remaining playlist entries and enabled loop mode")
+    logger.info(f"Preloaded full playlist; starting from: {first_name}")
 
 
 def _switch_to_preloaded_index(name: str) -> bool:
