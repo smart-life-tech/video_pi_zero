@@ -49,6 +49,7 @@ VIDEOS = [
     "Process_step_3.mp4",
 ]
 PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (VLC goto is 1-based)
+AVAILABLE_VIDEO_PATHS = {}
 
 # coil -> action
 MODBUS_COILS = {
@@ -191,50 +192,71 @@ def rebuild_playlist_index(video_paths):
     print(f"Playlist index: {mapping}")
 
 
-def switch_to_video(video_file: str):
-    idx = PLAYLIST_INDEX.get(video_file)
-    if idx is None:
-        log.error(f"Video not in current playlist: {video_file}")
-        print(f"Video not in current playlist: {video_file}")
-        return
+def rebuild_switch_playlist(target_video_file: str):
+    target_path = AVAILABLE_VIDEO_PATHS.get(target_video_file)
+    if not target_path:
+        log.error(f"Target not available: {target_video_file}")
+        print(f"Target not available: {target_video_file}")
+        return False
 
-    # Loop guide/warning until another trigger arrives
-    if video_file in ("Guide_steps.mp4", "Warning.mp4"):
+    ordered = [target_path]
+    for name in VIDEOS:
+        if name == target_video_file:
+            continue
+        other_path = AVAILABLE_VIDEO_PATHS.get(name)
+        if other_path:
+            ordered.append(other_path)
+
+    rc("stop")
+    rc("clear")
+    rc("random off")
+    rc("loop off")
+    if target_video_file in ("Guide_steps.mp4", "Warning.mp4"):
         rc("repeat on")
     else:
         rc("repeat off")
 
-    rc(f"goto {idx}")
+    rc(f"add {ordered[0]}")
+    time.sleep(0.1)
+    for v in ordered[1:]:
+        rc(f"enqueue {v}")
+        time.sleep(0.05)
+
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
+    return True
 
-    log.info(f"Switched to: {video_file}")
+
+def switch_to_video(video_file: str):
+    print(f"Switch request: {video_file}")
+    ok = rebuild_switch_playlist(video_file)
+    if ok:
+        log.info(f"Switched to: {video_file}")
+        print(f"Switched to: {video_file}")
+    else:
+        log.error(f"Switch failed: {video_file}")
+        print(f"Switch failed: {video_file}")
 
 
 def start_guide_idle():
     """Force guide video to become visible immediately at startup."""
-    guide_name = "Guide_steps.mp4"
-    idx = PLAYLIST_INDEX.get(guide_name)
-    if idx is None:
-        log.error("Guide_steps.mp4 is not in current playlist index")
-        print("Guide_steps.mp4 is not in current playlist index")
-        return
-
     print("Startup: forcing Guide_steps.mp4 on screen")
     log.info("Startup: forcing Guide_steps.mp4 on screen")
 
-    # Re-assert commands during VLC/vout warm-up to avoid delayed first display.
-    for _ in range(6):
-        rc("repeat on")
-        rc(f"goto {idx}")
-        rc("seek 0")
-        rc("play")
-        rc("fullscreen on")
+    ok = False
+    for _ in range(3):
+        ok = rebuild_switch_playlist("Guide_steps.mp4")
+        if ok:
+            break
         time.sleep(0.2)
 
-    log.info("Guide startup asserted")
-    print("Guide startup asserted")
+    if ok:
+        log.info("Guide startup asserted")
+        print("Guide startup asserted")
+    else:
+        log.error("Guide startup failed")
+        print("Guide startup failed")
 
 
 def can_trigger(action_name: str) -> bool:
@@ -358,11 +380,14 @@ def main():
     log.info("Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)")
     print("Starting vid_modbus...")
 
+    global AVAILABLE_VIDEO_PATHS
+    AVAILABLE_VIDEO_PATHS = {}
     video_paths = []
     for v in VIDEOS:
         p = os.path.abspath(resolve_video_path(v))
         if os.path.exists(p):
             video_paths.append(p)
+            AVAILABLE_VIDEO_PATHS[v] = p
         else:
             log.warning(f"Missing video: {p}")
 
