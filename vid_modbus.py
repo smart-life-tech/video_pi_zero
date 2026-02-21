@@ -48,8 +48,7 @@ VIDEOS = [
     "Process_step_2.mp4",
     "Process_step_3.mp4",
 ]
-
-VIDEO_INDEX = {name: idx + 1 for idx, name in enumerate(VIDEOS)}  # VLC playlist goto is 1-based
+PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (VLC goto is 1-based)
 
 # coil -> action
 MODBUS_COILS = {
@@ -180,9 +179,23 @@ def build_playlist(video_paths):
     rc("fullscreen on")
 
 
+def rebuild_playlist_index(video_paths):
+    global PLAYLIST_INDEX
+    PLAYLIST_INDEX = {}
+    for idx, full_path in enumerate(video_paths, start=1):
+        name = os.path.basename(full_path)
+        PLAYLIST_INDEX[name] = idx
+
+    mapping = ", ".join(f"{k}:{v}" for k, v in PLAYLIST_INDEX.items())
+    log.info(f"Playlist index: {mapping}")
+    print(f"Playlist index: {mapping}")
+
+
 def switch_to_video(video_file: str):
-    idx = VIDEO_INDEX.get(video_file)
+    idx = PLAYLIST_INDEX.get(video_file)
     if idx is None:
+        log.error(f"Video not in current playlist: {video_file}")
+        print(f"Video not in current playlist: {video_file}")
         return
 
     # Loop guide/warning until another trigger arrives
@@ -202,10 +215,14 @@ def switch_to_video(video_file: str):
 def start_guide_idle():
     """Force guide video to become visible immediately at startup."""
     guide_name = "Guide_steps.mp4"
-    idx = VIDEO_INDEX.get(guide_name)
+    idx = PLAYLIST_INDEX.get(guide_name)
     if idx is None:
-        log.error("Guide_steps.mp4 is not in playlist index")
+        log.error("Guide_steps.mp4 is not in current playlist index")
+        print("Guide_steps.mp4 is not in current playlist index")
         return
+
+    print("Startup: forcing Guide_steps.mp4 on screen")
+    log.info("Startup: forcing Guide_steps.mp4 on screen")
 
     # Re-assert commands during VLC/vout warm-up to avoid delayed first display.
     for _ in range(6):
@@ -217,6 +234,7 @@ def start_guide_idle():
         time.sleep(0.2)
 
     log.info("Guide startup asserted")
+    print("Guide startup asserted")
 
 
 def can_trigger(action_name: str) -> bool:
@@ -338,6 +356,7 @@ def read_coils():
 # ===============================
 def main():
     log.info("Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)")
+    print("Starting vid_modbus...")
 
     video_paths = []
     for v in VIDEOS:
@@ -349,11 +368,15 @@ def main():
 
     if not video_paths:
         log.error("No valid videos found")
+        print("No valid videos found")
         return
 
     # Startup VLC + playlist with same method as vid_test
+    print("Startup: launching VLC")
     start_vlc(video_paths[0])
+    print("Startup: building playlist")
     build_playlist(video_paths)
+    rebuild_playlist_index(video_paths)
 
     # Start on guide immediately and keep it visible until a trigger arrives
     start_guide_idle()
