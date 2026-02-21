@@ -168,6 +168,7 @@ modbus_running = False
 MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.2"))
 MODBUS_READ_FAILURES_BEFORE_RECONNECT = int(os.environ.get("MODBUS_READ_FAILURES_BEFORE_RECONNECT", "4"))
 MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
+COIL_REARM_LOW_SECONDS = float(os.environ.get("COIL_REARM_LOW_SECONDS", "0.9"))
 
 # Video playback queue (serialize requests from Modbus thread)
 video_queue = queue.Queue(maxsize=20)
@@ -918,8 +919,8 @@ def handle_modbus_trigger(action_name):
             print(f"  -> Ignored duplicate trigger (already active): {video_file}")
             return
 
-        logger.info(f"Modbus trigger: {action_name} -> {video_file}")
-        print(f"  -> Playing video: {video_file}")
+        logger.info(f"Modbus trigger queued: {action_name} -> {video_file}")
+        print(f"  -> Queued video: {video_file}")
         queue_video_play(video_file)
     else:
         logger.debug(f"Trigger for {action_name} ignored (cooldown active)")
@@ -934,6 +935,7 @@ def modbus_polling_loop():
     
     # Track last state of each coil to detect rising edge (0 -> 1 transition)
     last_coil_states = [False] * 5
+    low_since_times = [time.time()] * 5
     consecutive_read_failures = 0
 
     while modbus_running:
@@ -967,13 +969,21 @@ def modbus_polling_loop():
                 
                 # Trigger on rising edge (0 -> 1)
                 if current_state and not previous_state:
-                    logger.info(f"Rising edge detected on coil {coil_addr} ({action_name})")
-                    print(f"[Coil {coil_addr}] State changed: OFF -> ON ({action_name})")
-                    handle_modbus_trigger(action_name)
+                    low_duration = time.time() - low_since_times[idx]
+                    if low_duration >= COIL_REARM_LOW_SECONDS:
+                        logger.info(f"Rising edge detected on coil {coil_addr} ({action_name})")
+                        print(f"[Coil {coil_addr}] State changed: OFF -> ON ({action_name})")
+                        handle_modbus_trigger(action_name)
+                    else:
+                        logger.info(
+                            f"Ignored short re-arm on coil {coil_addr} ({action_name}); "
+                            f"low_duration={low_duration:.3f}s"
+                        )
                 # Also log falling edge for visibility
                 elif not current_state and previous_state:
                     logger.info(f"Falling edge detected on coil {coil_addr} ({action_name})")
                     print(f"[Coil {coil_addr}] State changed: ON -> OFF ({action_name})")
+                    low_since_times[idx] = time.time()
                 
                 # Update last state
                 last_coil_states[idx] = current_state
