@@ -42,7 +42,18 @@ video_process_lock = threading.Lock()
 current_video_process = None
 black_vlc_process = None
 terminal_guard_running = False
+transition_mask_active = False
 BLACK_IMAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_black_test.ppm")
+
+TERMINAL_WINDOW_CLASSES = [
+    "lxterminal",
+    "xfce4-terminal",
+    "gnome-terminal",
+    "xterm",
+    "qterminal",
+    "konsole",
+    "mate-terminal",
+]
 
 
 def resolve_video_path(filename: str) -> str:
@@ -166,6 +177,38 @@ def hide_terminal_window_linux():
         except Exception:
             continue
 
+    if shutil.which("xdotool") is None:
+        return
+
+    # Aggressively minimize terminal windows by common class/name patterns.
+    for class_name in TERMINAL_WINDOW_CLASSES:
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--onlyvisible", "--class", class_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowminimize", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            continue
+
+    for token in ("Terminal", "LXTerminal", "xterm"):
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--onlyvisible", "--name", token],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            window_ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowminimize", window_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            continue
+
 
 def terminal_guard_loop():
     global terminal_guard_running
@@ -173,6 +216,8 @@ def terminal_guard_loop():
         return
     while terminal_guard_running:
         hide_terminal_window_linux()
+        if transition_mask_active and black_vlc_process is not None and black_vlc_process.poll() is None:
+            _raise_vlc_windows_for_pid_linux(black_vlc_process)
         time.sleep(TERMINAL_GUARD_INTERVAL_SECONDS)
 
 
@@ -215,7 +260,7 @@ def _prepare_transition_cover_locked():
 
 
 def play_video_smooth(video_file: str):
-    global current_video_process
+    global current_video_process, transition_mask_active
 
     video_path = resolve_video_path(video_file)
     if not os.path.exists(video_path):
@@ -228,6 +273,7 @@ def play_video_smooth(video_file: str):
         return
 
     with video_process_lock:
+        transition_mask_active = True
         _prepare_transition_cover_locked()
 
         current_video_process = _stop_process(current_video_process)
@@ -246,6 +292,8 @@ def play_video_smooth(video_file: str):
         ]
         current_video_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         _post_launch_fix_vlc_window(current_video_process, delay_seconds=TRANSITION_BLACK_HOLD_SECONDS)
+        time.sleep(TRANSITION_BLACK_HOLD_SECONDS)
+        transition_mask_active = False
 
     logger.info(f"Now playing: {video_file}")
 
