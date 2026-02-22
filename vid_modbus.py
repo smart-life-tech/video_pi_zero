@@ -303,7 +303,7 @@ def build_playlist(video_paths):
     rc("stop")
     rc("clear")
     rc("repeat off")
-    rc("loop off")
+    rc("loop on")
     rc("random off")
 
     rc(f"add {video_paths[0]}")
@@ -329,52 +329,28 @@ def rebuild_playlist_index(video_paths):
     print(f"Playlist index: {mapping}")
 
 
-def rebuild_switch_playlist(target_video_file: str):
-    target_path = AVAILABLE_VIDEO_PATHS.get(target_video_file)
-    if not target_path:
-        log.error(f"Target not available: {target_video_file}")
-        print(f"Target not available: {target_video_file}")
-        return False
+def switch_to_video(video_file: str):
+    print(f"Switch request: {video_file}")
+    playlist_pos = PLAYLIST_INDEX.get(video_file)
+    if not playlist_pos:
+        log.error(f"Target not in playlist index: {video_file}")
+        print(f"Target not in playlist index: {video_file}")
+        return
 
-    ordered = [target_path]
-    for name in VIDEOS:
-        if name == target_video_file:
-            continue
-        other_path = AVAILABLE_VIDEO_PATHS.get(name)
-        if other_path:
-            ordered.append(other_path)
-
-    rc("stop")
-    rc("clear")
-    rc("random off")
-    rc("loop off")
-    if target_video_file in ("Guide_steps.mp4", "Warning.mp4"):
+    if video_file in ("Guide_steps.mp4", "Warning.mp4"):
         rc("repeat on")
     else:
         rc("repeat off")
-
-    rc(f"add {ordered[0]}")
-    time.sleep(0.1)
-    for v in ordered[1:]:
-        rc(f"enqueue {v}")
-        time.sleep(0.05)
-
+    rc("loop on")
+    rc("random off")
+    rc(f"goto {playlist_pos}")
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
-    return True
 
-
-def switch_to_video(video_file: str):
-    print(f"Switch request: {video_file}")
-    ok = rebuild_switch_playlist(video_file)
-    if ok:
-        force_vlc_window_visible()
-        log.info(f"Switched to: {video_file}")
-        print(f"Switched to: {video_file}")
-    else:
-        log.error(f"Switch failed: {video_file}")
-        print(f"Switch failed: {video_file}")
+    force_vlc_window_visible()
+    log.info(f"Switched to: {video_file}")
+    print(f"Switched to: {video_file}")
 
 
 def start_guide_idle():
@@ -384,12 +360,22 @@ def start_guide_idle():
 
     ok = False
     for _ in range(3):
-        ok = rebuild_switch_playlist("Guide_steps.mp4")
+        playlist_pos = PLAYLIST_INDEX.get("Guide_steps.mp4")
+        if playlist_pos:
+            rc("repeat on")
+            rc("loop on")
+            rc("random off")
+            rc(f"goto {playlist_pos}")
+            rc("seek 0")
+            rc("play")
+            rc("fullscreen on")
+            ok = True
         if ok:
             break
         time.sleep(0.2)
 
     if ok:
+        force_vlc_window_visible()
         log.info("Guide startup asserted")
         print("Guide startup asserted")
     else:
