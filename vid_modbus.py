@@ -92,8 +92,10 @@ VIDEOS = [
     "Process_step_2.mp4",
     "Process_step_3.mp4",
 ]
-PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (VLC goto is 1-based)
+PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (0-based positions)
 AVAILABLE_VIDEO_PATHS = {}
+ACTIVE_PLAYLIST = []
+current_playlist_index = 0
 
 # coil -> action
 MODBUS_COILS = {
@@ -300,6 +302,7 @@ def start_vlc(dummy_video: str):
 
 def build_playlist(video_paths):
     # EXACT same method pattern as vid_test
+    global current_playlist_index
     rc("stop")
     rc("clear")
     rc("repeat off")
@@ -315,12 +318,15 @@ def build_playlist(video_paths):
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
+    current_playlist_index = 0
 
 
 def rebuild_playlist_index(video_paths):
     global PLAYLIST_INDEX
+    global ACTIVE_PLAYLIST
     PLAYLIST_INDEX = {}
-    for idx, full_path in enumerate(video_paths, start=1):
+    ACTIVE_PLAYLIST = [os.path.basename(path) for path in video_paths]
+    for idx, full_path in enumerate(video_paths):
         name = os.path.basename(full_path)
         PLAYLIST_INDEX[name] = idx
 
@@ -330,9 +336,10 @@ def rebuild_playlist_index(video_paths):
 
 
 def switch_to_video(video_file: str):
+    global current_playlist_index
     print(f"Switch request: {video_file}")
     playlist_pos = PLAYLIST_INDEX.get(video_file)
-    if not playlist_pos:
+    if playlist_pos is None:
         log.error(f"Target not in playlist index: {video_file}")
         print(f"Target not in playlist index: {video_file}")
         return
@@ -343,7 +350,15 @@ def switch_to_video(video_file: str):
         rc("repeat off")
     rc("loop on")
     rc("random off")
-    rc(f"goto {playlist_pos}")
+
+    # Use next-stepping (same reliable behavior used in vid_test) instead of goto.
+    if ACTIVE_PLAYLIST:
+        steps = (playlist_pos - current_playlist_index) % len(ACTIVE_PLAYLIST)
+        for _ in range(steps):
+            rc("next")
+            time.sleep(0.05)
+        current_playlist_index = playlist_pos
+
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
@@ -361,11 +376,17 @@ def start_guide_idle():
     ok = False
     for _ in range(3):
         playlist_pos = PLAYLIST_INDEX.get("Guide_steps.mp4")
-        if playlist_pos:
+        if playlist_pos is not None:
             rc("repeat on")
             rc("loop on")
             rc("random off")
-            rc(f"goto {playlist_pos}")
+            if ACTIVE_PLAYLIST:
+                global current_playlist_index
+                steps = (playlist_pos - current_playlist_index) % len(ACTIVE_PLAYLIST)
+                for _ in range(steps):
+                    rc("next")
+                    time.sleep(0.05)
+                current_playlist_index = playlist_pos
             rc("seek 0")
             rc("play")
             rc("fullscreen on")
