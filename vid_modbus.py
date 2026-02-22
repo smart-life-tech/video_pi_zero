@@ -121,6 +121,7 @@ MODBUS_UNIT_ID = int(os.environ.get("MODBUS_UNIT_ID", "1"))
 MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.1"))
 MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 TRIGGER_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "0.8"))
+MODBUS_READ_FAIL_RECONNECT_THRESHOLD = int(os.environ.get("MODBUS_READ_FAIL_RECONNECT_THRESHOLD", "30"))
 
 ETH_INTERFACE = os.environ.get("ETH_INTERFACE", "eth0")
 PI_STATIC_IP_CIDR = os.environ.get("PI_STATIC_IP_CIDR", "192.168.1.10/24")
@@ -133,6 +134,8 @@ VLC_LOG_FILE = os.environ.get("VLC_LOG_FILE", "vlc_startup.log")
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
 read_fail_streak = 0
+last_network_reassert_time = 0.0
+NETWORK_REASSERT_COOLDOWN_SECONDS = float(os.environ.get("NETWORK_REASSERT_COOLDOWN_SECONDS", "3.0"))
 
 
 # ===============================
@@ -480,6 +483,7 @@ def ensure_network_ready() -> bool:
 
 
 def read_coils():
+    global last_network_reassert_time
     if not modbus_client:
         return None
     try:
@@ -491,7 +495,18 @@ def read_coils():
             return None
         return result.bits[:5]
     except Exception as e:
-        log.warning(f"Modbus read exception: {e}")
+        err_text = str(e)
+        log.warning(f"Modbus read exception: {err_text}")
+
+        # Immediately re-assert Ethernet when PLC stops responding on read retries.
+        if "No response received after" in err_text or "Input/Output" in err_text:
+            now = time.time()
+            if now - last_network_reassert_time >= NETWORK_REASSERT_COOLDOWN_SECONDS:
+                log.warning("Read timeout/no-response detected; re-asserting network via ensure_network_ready()")
+                print("Read timeout/no-response detected; re-asserting network via ensure_network_ready()")
+                ensure_network_ready()
+                last_network_reassert_time = now
+
         return None
 
 
@@ -555,7 +570,15 @@ def main():
             states = read_coils()
             if states is None:
                 read_fail_streak += 1
-                if read_fail_streak >= 5:
+                if read_fail_streak % 5 == 0:
+                    log.warning(
+                        f"Modbus read failed x{read_fail_streak} (threshold {MODBUS_READ_FAIL_RECONNECT_THRESHOLD})"
+                    )
+                    print(
+                        f"Modbus read failed x{read_fail_streak} (threshold {MODBUS_READ_FAIL_RECONNECT_THRESHOLD})"
+                    )
+
+                if read_fail_streak >= MODBUS_READ_FAIL_RECONNECT_THRESHOLD:
                     log.warning("Modbus read failed repeatedly, reconnecting...")
                     print("Modbus read failed repeatedly, reconnecting...")
                     time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
