@@ -559,6 +559,15 @@ def main():
                     log.warning("Modbus read failed repeatedly, reconnecting...")
                     print("Modbus read failed repeatedly, reconnecting...")
                     time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+
+                    # Always re-assert Ethernet config during runtime disconnect recovery.
+                    if not ensure_network_ready():
+                        log.warning("Network re-assert failed during reconnect; will retry")
+                        print("Network re-assert failed during reconnect; will retry")
+                        read_fail_streak = 0
+                        time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
+                        continue
+
                     connect_modbus()
                     read_fail_streak = 0
                     time.sleep(MODBUS_RECONNECT_DELAY_SECONDS)
