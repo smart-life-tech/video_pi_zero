@@ -336,29 +336,23 @@ def rebuild_playlist_index(video_paths):
 
 
 def switch_to_video(video_file: str):
-    global current_playlist_index
     print(f"Switch request: {video_file}")
-    playlist_pos = PLAYLIST_INDEX.get(video_file)
-    if playlist_pos is None:
-        log.error(f"Target not in playlist index: {video_file}")
-        print(f"Target not in playlist index: {video_file}")
+    target_path = AVAILABLE_VIDEO_PATHS.get(video_file)
+    if not target_path:
+        log.error(f"Target not available: {video_file}")
+        print(f"Target not available: {video_file}")
         return
 
+    rc("stop")
+    rc("clear")
     if video_file in ("Guide_steps.mp4", "Warning.mp4"):
         rc("repeat on")
     else:
         rc("repeat off")
-    rc("loop on")
+    rc("loop off")
     rc("random off")
-
-    # Use next-stepping (same reliable behavior used in vid_test) instead of goto.
-    if ACTIVE_PLAYLIST:
-        steps = (playlist_pos - current_playlist_index) % len(ACTIVE_PLAYLIST)
-        for _ in range(steps):
-            rc("next")
-            time.sleep(0.05)
-        current_playlist_index = playlist_pos
-
+    rc(f"add {target_path}")
+    time.sleep(0.08)
     rc("seek 0")
     rc("play")
     rc("fullscreen on")
@@ -375,22 +369,8 @@ def start_guide_idle():
 
     ok = False
     for _ in range(3):
-        playlist_pos = PLAYLIST_INDEX.get("Guide_steps.mp4")
-        if playlist_pos is not None:
-            rc("repeat on")
-            rc("loop on")
-            rc("random off")
-            if ACTIVE_PLAYLIST:
-                global current_playlist_index
-                steps = (playlist_pos - current_playlist_index) % len(ACTIVE_PLAYLIST)
-                for _ in range(steps):
-                    rc("next")
-                    time.sleep(0.05)
-                current_playlist_index = playlist_pos
-            rc("seek 0")
-            rc("play")
-            rc("fullscreen on")
-            ok = True
+        switch_to_video("Guide_steps.mp4")
+        ok = True
         if ok:
             break
         time.sleep(0.2)
