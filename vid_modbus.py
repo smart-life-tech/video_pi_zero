@@ -87,10 +87,10 @@ def configure_x11_auth():
 # ===============================
 VIDEOS = [
     "Guide_steps.mp4",
-    "Process_step_1.mp4",
+    "Process_step_3.mp4",
     "Warning.mp4",
     "Process_step_2.mp4",
-    "Process_step_3.mp4",
+    "Process_step_1.mp4",
 ]
 PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (0-based positions)
 AVAILABLE_VIDEO_PATHS = {}
