@@ -131,6 +131,12 @@ RC_HOST = "127.0.0.1"
 RC_PORT = int(os.environ.get("VLC_RC_PORT", "4213"))
 VLC_LOG_FILE = os.environ.get("VLC_LOG_FILE", "vlc_startup.log")
 
+try:
+    VLC_VOLUME_PERCENT = int(os.environ.get("VLC_VOLUME_PERCENT", "100"))
+except ValueError:
+    VLC_VOLUME_PERCENT = 100
+VLC_VOLUME_PERCENT = max(0, min(200, VLC_VOLUME_PERCENT))
+
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
 read_fail_streak = 0
@@ -162,6 +168,35 @@ def rc(cmd: str):
         s.close()
     except Exception:
         pass
+
+
+def set_system_volume(percent: int):
+    if not sys.platform.startswith("linux"):
+        return
+
+    controls = ["Master", "PCM", "Speaker", "Headphone"]
+    for control in controls:
+        try:
+            result = subprocess.run(
+                ["amixer", "-q", "sset", control, f"{percent}%", "unmute"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                log.info(f"Audio control set: {control}={percent}% unmute")
+                return
+        except Exception:
+            continue
+
+    log.warning("Could not set ALSA volume via amixer controls (Master/PCM/Speaker/Headphone)")
+
+
+def apply_audio_settings():
+    vlc_volume = max(0, min(512, int((VLC_VOLUME_PERCENT / 100.0) * 256)))
+    rc(f"volume {vlc_volume}")
+    set_system_volume(VLC_VOLUME_PERCENT)
+    log.info(f"Audio settings applied: VLC_VOLUME_PERCENT={VLC_VOLUME_PERCENT} (vlc={vlc_volume})")
 
 
 def wait_for_rc(timeout=8) -> bool:
@@ -267,6 +302,7 @@ def start_vlc(dummy_video: str):
         "--rc-host", f"{RC_HOST}:{RC_PORT}",
         "--x11-display", os.environ.get("DISPLAY", ":0"),
         "--vout", "x11",
+        "--aout", "alsa",
         "--avcodec-hw=none",
         "--no-embedded-video",
         "--video-x", "0",
@@ -297,6 +333,8 @@ def start_vlc(dummy_video: str):
     if not wait_for_rc():
         log.error("VLC RC interface did not respond")
         sys.exit(1)
+
+    apply_audio_settings()
 
     # Make sure VLC surface is visible even when launched from different terminals/sessions.
     force_vlc_window_visible()
@@ -357,6 +395,7 @@ def switch_to_video(video_file: str):
     time.sleep(0.08)
     rc("seek 0")
     rc("play")
+    apply_audio_settings()
     rc("fullscreen on")
 
     force_vlc_window_visible()
