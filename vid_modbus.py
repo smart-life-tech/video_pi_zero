@@ -134,9 +134,10 @@ VLC_LOG_FILE = os.environ.get("VLC_LOG_FILE", "vlc_startup.log")
 try:
     VLC_VOLUME_PERCENT = int(os.environ.get("VLC_VOLUME_PERCENT", "100"))
 except ValueError:
-    VLC_VOLUME_PERCENT = 100
+    VLC_VOLUME_PERCENT = 250
 VLC_VOLUME_PERCENT = max(0, min(200, VLC_VOLUME_PERCENT))
 VLC_AOUT = os.environ.get("VLC_AOUT", "").strip()
+VLC_ALSA_DEVICE = os.environ.get("VLC_ALSA_DEVICE", "default").strip() or "default"
 
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
@@ -201,6 +202,43 @@ def _set_pulse_volume(percent: int) -> bool:
     return False
 
 
+def _set_wpctl_volume(percent: int) -> bool:
+    if not sys.platform.startswith("linux") or not shutil.which("wpctl"):
+        return False
+
+    try:
+        unmute = subprocess.run(
+            ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        volume_ratio = max(0.0, min(2.0, percent / 100.0))
+        set_vol = subprocess.run(
+            ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{volume_ratio:.2f}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if unmute.returncode == 0 and set_vol.returncode == 0:
+            log.info(f"Audio sink set via wpctl: {percent}% unmute")
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _detect_vlc_aout() -> str:
+    if VLC_AOUT:
+        return VLC_AOUT
+    if shutil.which("pactl"):
+        return "pulse"
+    if os.path.exists("/proc/asound/cards"):
+        return "alsa"
+    return ""
+
+
 def _available_alsa_controls():
     if not shutil.which("amixer"):
         return []
@@ -227,6 +265,9 @@ def set_system_volume(percent: int):
         return
 
     if _set_pulse_volume(percent):
+        return
+
+    if _set_wpctl_volume(percent):
         return
 
     detected_controls = _available_alsa_controls()
@@ -262,6 +303,9 @@ def set_system_volume(percent: int):
 def apply_audio_settings():
     vlc_volume = _vlc_volume_from_percent(VLC_VOLUME_PERCENT)
     rc(f"volume {vlc_volume}")
+    time.sleep(0.05)
+    rc(f"volume {vlc_volume}")
+    rc("key key-vol-up")
     set_system_volume(VLC_VOLUME_PERCENT)
     log.info(f"Audio settings applied: VLC_VOLUME_PERCENT={VLC_VOLUME_PERCENT} (vlc={vlc_volume})")
 
@@ -382,8 +426,14 @@ def start_vlc(dummy_video: str):
         dummy_video,
     ]
 
-    if VLC_AOUT:
-        cmd.extend(["--aout", VLC_AOUT])
+    chosen_aout = _detect_vlc_aout()
+    if chosen_aout:
+        cmd.extend(["--aout", chosen_aout])
+        if chosen_aout == "alsa":
+            cmd.extend(["--alsa-audio-device", VLC_ALSA_DEVICE])
+        log.info(f"VLC audio backend: {chosen_aout}")
+    else:
+        log.info("VLC audio backend: auto (no explicit override)")
 
     log.info("Launching VLC RC controller")
     print(f"Launching VLC RC controller (log: {VLC_LOG_FILE})")
