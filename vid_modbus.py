@@ -136,6 +136,7 @@ try:
 except ValueError:
     VLC_VOLUME_PERCENT = 100
 VLC_VOLUME_PERCENT = max(0, min(200, VLC_VOLUME_PERCENT))
+VLC_AOUT = os.environ.get("VLC_AOUT", "").strip()
 
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
@@ -170,11 +171,74 @@ def rc(cmd: str):
         pass
 
 
+def _vlc_volume_from_percent(percent: int) -> int:
+    return max(0, min(512, int((percent / 100.0) * 256)))
+
+
+def _set_pulse_volume(percent: int) -> bool:
+    if not sys.platform.startswith("linux") or not shutil.which("pactl"):
+        return False
+
+    try:
+        unmute = subprocess.run(
+            ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        set_vol = subprocess.run(
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if unmute.returncode == 0 and set_vol.returncode == 0:
+            log.info(f"Audio sink set via pactl: {percent}% unmute")
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _available_alsa_controls():
+    if not shutil.which("amixer"):
+        return []
+
+    try:
+        result = subprocess.run(["amixer", "scontrols"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return []
+
+        controls = []
+        for line in (result.stdout or "").splitlines():
+            line = line.strip()
+            if "'" in line:
+                parts = line.split("'")
+                if len(parts) >= 2 and parts[1]:
+                    controls.append(parts[1])
+        return controls
+    except Exception:
+        return []
+
+
 def set_system_volume(percent: int):
     if not sys.platform.startswith("linux"):
         return
 
-    controls = ["Master", "PCM", "Speaker", "Headphone"]
+    if _set_pulse_volume(percent):
+        return
+
+    detected_controls = _available_alsa_controls()
+    preferred_keywords = ["master", "pcm", "speaker", "headphone", "lineout", "digital", "hdmi"]
+
+    preferred_controls = []
+    for keyword in preferred_keywords:
+        for control in detected_controls:
+            if keyword in control.lower() and control not in preferred_controls:
+                preferred_controls.append(control)
+
+    controls = preferred_controls or detected_controls
     for control in controls:
         try:
             result = subprocess.run(
@@ -189,11 +253,14 @@ def set_system_volume(percent: int):
         except Exception:
             continue
 
-    log.warning("Could not set ALSA volume via amixer controls (Master/PCM/Speaker/Headphone)")
+    if detected_controls:
+        log.warning(f"Could not set ALSA volume on detected controls: {', '.join(detected_controls)}")
+    else:
+        log.warning("No ALSA mixer controls found (amixer scontrols empty/unavailable)")
 
 
 def apply_audio_settings():
-    vlc_volume = max(0, min(512, int((VLC_VOLUME_PERCENT / 100.0) * 256)))
+    vlc_volume = _vlc_volume_from_percent(VLC_VOLUME_PERCENT)
     rc(f"volume {vlc_volume}")
     set_system_volume(VLC_VOLUME_PERCENT)
     log.info(f"Audio settings applied: VLC_VOLUME_PERCENT={VLC_VOLUME_PERCENT} (vlc={vlc_volume})")
@@ -302,7 +369,8 @@ def start_vlc(dummy_video: str):
         "--rc-host", f"{RC_HOST}:{RC_PORT}",
         "--x11-display", os.environ.get("DISPLAY", ":0"),
         "--vout", "x11",
-        "--aout", "alsa",
+        "--volume", str(_vlc_volume_from_percent(VLC_VOLUME_PERCENT)),
+        "--no-volume-save",
         "--avcodec-hw=none",
         "--no-embedded-video",
         "--video-x", "0",
@@ -314,6 +382,9 @@ def start_vlc(dummy_video: str):
         dummy_video,
     ]
 
+    if VLC_AOUT:
+        cmd.extend(["--aout", VLC_AOUT])
+
     log.info("Launching VLC RC controller")
     print(f"Launching VLC RC controller (log: {VLC_LOG_FILE})")
 
@@ -322,11 +393,26 @@ def start_vlc(dummy_video: str):
     vlc_log.write("Command: " + " ".join(cmd) + "\n")
     vlc_log.write(f"DISPLAY={os.environ.get('DISPLAY')} XAUTHORITY={os.environ.get('XAUTHORITY')}\n")
 
+    launch_cmd = cmd
+    launch_env = os.environ.copy()
+
+    if sys.platform.startswith("linux") and os.geteuid() == 0:
+        desktop_user = os.environ.get("SUDO_USER")
+        if desktop_user and shutil.which("sudo"):
+            try:
+                desktop_uid = pwd.getpwnam(desktop_user).pw_uid
+                launch_env["XDG_RUNTIME_DIR"] = f"/run/user/{desktop_uid}"
+            except Exception:
+                pass
+            launch_cmd = ["sudo", "-u", desktop_user, "-E"] + cmd
+            log.info(f"Launching VLC as desktop user: {desktop_user}")
+            print(f"Launching VLC as desktop user: {desktop_user}")
+
     subprocess.Popen(
-        cmd,
+        launch_cmd,
         stdout=vlc_log,
         stderr=vlc_log,
-        env=os.environ.copy(),
+        env=launch_env,
         start_new_session=True,
     )
 
