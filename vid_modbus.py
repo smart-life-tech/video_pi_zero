@@ -275,7 +275,6 @@ def start_vlc(dummy_video: str):
         "--video-on-top",
         "--no-video-title-show",
         "--no-osd",
-        "--no-audio",
         dummy_video,
     ]
 
