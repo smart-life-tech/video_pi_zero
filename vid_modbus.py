@@ -302,10 +302,14 @@ def set_system_volume(percent: int):
 
 def apply_audio_settings():
     vlc_volume = _vlc_volume_from_percent(VLC_VOLUME_PERCENT)
-    rc(f"volume {vlc_volume}")
-    time.sleep(0.05)
-    rc(f"volume {vlc_volume}")
+    for _ in range(3):
+        rc("play")
+        rc("atrack 1")
+        rc(f"volume {vlc_volume}")
+        time.sleep(0.06)
+
     rc("key key-vol-up")
+    rc("key key-vol-down")
     set_system_volume(VLC_VOLUME_PERCENT)
     log.info(f"Audio settings applied: VLC_VOLUME_PERCENT={VLC_VOLUME_PERCENT} (vlc={vlc_volume})")
 
@@ -528,9 +532,11 @@ def switch_to_video(video_file: str):
     rc("loop off")
     rc("random off")
     rc(f"add {target_path}")
-    time.sleep(0.08)
+    time.sleep(0.18)
     rc("seek 0")
     rc("play")
+    apply_audio_settings()
+    time.sleep(0.12)
     apply_audio_settings()
     rc("fullscreen on")
 
