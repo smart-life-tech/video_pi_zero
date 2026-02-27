@@ -130,6 +130,11 @@ PLC_PING_IP = os.environ.get("PLC_PING_IP", "192.168.1.100")
 RC_HOST = "127.0.0.1"
 RC_PORT = int(os.environ.get("VLC_RC_PORT", "4213"))
 VLC_LOG_FILE = os.environ.get("VLC_LOG_FILE", "vlc_startup.log")
+try:
+    VLC_VOLUME_PERCENT = int(os.environ.get("VLC_VOLUME_PERCENT", "80"))
+except ValueError:
+    VLC_VOLUME_PERCENT = 80
+VLC_VOLUME_PERCENT = max(0, min(200, VLC_VOLUME_PERCENT))
 
 modbus_client = None
 last_trigger_time = {key: 0.0 for key in MODBUS_COILS}
@@ -162,6 +167,23 @@ def rc(cmd: str):
         s.close()
     except Exception:
         pass
+
+
+def _vlc_volume_from_percent(percent: int) -> int:
+    return max(0, min(512, int((percent / 100.0) * 256)))
+
+
+def apply_audio_settings(retries: int = 3, delay: float = 0.08):
+    vlc_volume = _vlc_volume_from_percent(VLC_VOLUME_PERCENT)
+    for _ in range(retries):
+        rc("play")
+        rc("atrack 1")
+        rc(f"volume {vlc_volume}")
+        time.sleep(delay)
+
+    rc("key key-vol-up")
+    rc("key key-vol-down")
+    log.info(f"Audio settings re-applied: volume={VLC_VOLUME_PERCENT}% (vlc={vlc_volume})")
 
 
 def wait_for_rc(timeout=8) -> bool:
@@ -298,6 +320,8 @@ def start_vlc(dummy_video: str):
         log.error("VLC RC interface did not respond")
         sys.exit(1)
 
+    apply_audio_settings()
+
     # Make sure VLC surface is visible even when launched from different terminals/sessions.
     force_vlc_window_visible()
 
@@ -354,9 +378,12 @@ def switch_to_video(video_file: str):
     rc("loop off")
     rc("random off")
     rc(f"add {target_path}")
-    time.sleep(0.08)
+    time.sleep(0.18)
     rc("seek 0")
     rc("play")
+    apply_audio_settings()
+    time.sleep(0.10)
+    apply_audio_settings(retries=2, delay=0.06)
     rc("fullscreen on")
 
     force_vlc_window_visible()
