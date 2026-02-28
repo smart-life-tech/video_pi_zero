@@ -169,6 +169,23 @@ def rc(cmd: str):
         pass
 
 
+def rc_many(commands, inter_command_delay: float = 0.03):
+    if not commands:
+        return
+    try:
+        s = socket.create_connection((RC_HOST, RC_PORT), timeout=0.8)
+        for cmd in commands:
+            s.sendall((cmd + "\n").encode("utf-8"))
+            if inter_command_delay > 0:
+                time.sleep(inter_command_delay)
+        s.close()
+    except Exception:
+        for cmd in commands:
+            rc(cmd)
+            if inter_command_delay > 0:
+                time.sleep(inter_command_delay)
+
+
 def _vlc_volume_from_percent(percent: int) -> int:
     return max(0, min(512, int((percent / 100.0) * 256)))
 
@@ -176,13 +193,10 @@ def _vlc_volume_from_percent(percent: int) -> int:
 def apply_audio_settings(retries: int = 3, delay: float = 0.08):
     vlc_volume = _vlc_volume_from_percent(VLC_VOLUME_PERCENT)
     for _ in range(retries):
-        rc("play")
-        rc("atrack 1")
-        rc(f"volume {vlc_volume}")
+        rc_many(["play", "atrack 1", f"volume {vlc_volume}"], inter_command_delay=0.02)
         time.sleep(delay)
 
-    rc("key key-vol-up")
-    rc("key key-vol-down")
+    rc_many(["key key-vol-up", "key key-vol-down"], inter_command_delay=0.02)
     log.info(f"Audio settings re-applied: volume={VLC_VOLUME_PERCENT}% (vlc={vlc_volume})")
 
 
@@ -329,11 +343,7 @@ def start_vlc(dummy_video: str):
 def build_playlist(video_paths):
     # EXACT same method pattern as vid_test
     global current_playlist_index
-    rc("stop")
-    rc("clear")
-    rc("repeat off")
-    rc("loop on")
-    rc("random off")
+    rc_many(["stop", "clear", "repeat off", "loop on", "random off"], inter_command_delay=0.03)
 
     rc(f"add {video_paths[0]}")
     time.sleep(0.1)
@@ -341,9 +351,7 @@ def build_playlist(video_paths):
         rc(f"enqueue {v}")
         time.sleep(0.05)
 
-    rc("seek 0")
-    rc("play")
-    rc("fullscreen on")
+    rc_many(["seek 0", "play", "fullscreen on"], inter_command_delay=0.03)
     current_playlist_index = 0
 
 
@@ -369,18 +377,15 @@ def switch_to_video(video_file: str):
         print(f"Target not available: {video_file}")
         return
 
-    rc("stop")
-    rc("clear")
+    rc_many(["stop", "clear"], inter_command_delay=0.03)
     if video_file in ("Guide_steps.mp4", "Warning.mp4"):
-        rc("repeat on")
+        repeat_cmd = "repeat on"
     else:
-        rc("repeat off")
-    rc("loop off")
-    rc("random off")
-    rc(f"add {target_path}")
+        repeat_cmd = "repeat off"
+
+    rc_many([repeat_cmd, "loop off", "random off", f"add {target_path}"], inter_command_delay=0.03)
     time.sleep(0.18)
-    rc("seek 0")
-    rc("play")
+    rc_many(["seek 0", "play"], inter_command_delay=0.03)
     apply_audio_settings()
     time.sleep(0.10)
     apply_audio_settings(retries=2, delay=0.06)
