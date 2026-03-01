@@ -96,6 +96,7 @@ PLAYLIST_INDEX = {}  # built at runtime from actually loaded files (0-based posi
 AVAILABLE_VIDEO_PATHS = {}
 ACTIVE_PLAYLIST = []
 current_playlist_index = 0
+current_video_file = None
 
 # coil -> action
 MODBUS_COILS = {
@@ -370,6 +371,7 @@ def rebuild_playlist_index(video_paths):
 
 
 def switch_to_video(video_file: str):
+    global current_video_file
     print(f"Switch request: {video_file}")
     target_path = AVAILABLE_VIDEO_PATHS.get(video_file)
     if not target_path:
@@ -377,7 +379,11 @@ def switch_to_video(video_file: str):
         print(f"Target not available: {video_file}")
         return
 
-    rc_many(["stop", "clear"], inter_command_delay=0.03)
+    # Keep VLC surface alive during Guide -> Step1 transition to avoid terminal flash.
+    soft_switch = current_video_file == "Guide_steps.mp4" and video_file == "Process_step_1.mp4"
+    if not soft_switch:
+        rc_many(["stop", "clear"], inter_command_delay=0.03)
+
     if video_file in ("Guide_steps.mp4", "Warning.mp4"):
         repeat_cmd = "repeat on"
     else:
@@ -390,6 +396,7 @@ def switch_to_video(video_file: str):
     time.sleep(0.10)
     apply_audio_settings(retries=2, delay=0.06)
     rc("fullscreen on")
+    current_video_file = video_file
 
     force_vlc_window_visible()
     log.info(f"Switched to: {video_file}")
