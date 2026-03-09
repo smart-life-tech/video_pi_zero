@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Helmet Wash Dual Control</title>
+    <link rel="stylesheet" href="/static/dual_control.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Helmet Wash Live Control</h1>
+      <div id="connectionBadge" class="badge">Connecting...</div>
+    </header>
+
+    <main class="split-grid">
+      {% for slot_id, slot in slots.items() %}
+      <section class="slot" data-slot-id="{{ slot_id }}">
+        <video class="slot-video" autoplay muted loop playsinline>
+          <source src="/videos/{{ slot.video_file }}" type="video/mp4" />
+        </video>
+
+        <div class="slot-overlay">
+          <div class="slot-header">
+            <h2>{{ slot.name }}</h2>
+            <p class="slot-state" id="state-{{ slot_id }}">State: Unknown</p>
+          </div>
+
+          <div class="controls">
+            <button class="btn btn-start" data-action="start" data-slot="{{ slot_id }}">Start</button>
+            <button class="btn btn-stop" data-action="stop" data-slot="{{ slot_id }}">Stop</button>
+          </div>
+
+          <p class="status-line" id="message-{{ slot_id }}">Ready</p>
+        </div>
+      </section>
+      {% endfor %}
+    </main>
+
+    <script src="/static/dual_control.js"></script>
+  </body>
+</html>

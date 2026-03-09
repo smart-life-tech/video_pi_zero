@@ -78,3 +78,68 @@ Default filenames used:
 - Videos must be placed in `/home/helmwash/Videos/`
 - The program runs indefinitely until interrupted (Ctrl+C)
 - Seamless transitions are achieved by preparing the next video before stopping the current one
+
+## Flask Dual-Slot PLC Control
+
+This project now includes a web dashboard for two helmet-wash slots with:
+
+- Split-screen live video panels
+- On-screen Start and Stop overlay buttons for each slot
+- PLC command write via Modbus TCP when buttons are pressed
+- Live running/idle status polling from PLC coils
+
+### Files
+
+- `flask_dual_control.py`: Flask backend + Modbus read/write API
+- `templates/dual_control.html`: UI layout
+- `static/dual_control.css`: split-screen styling and overlay controls
+- `static/dual_control.js`: button actions and status polling
+
+### Install
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+python flask_dual_control.py
+```
+
+Open:
+
+```text
+http://<pi-ip>:8080
+```
+
+### Environment Variables
+
+Use these to match your PLC address and coil mapping:
+
+- `MODBUS_SERVER_IP` (default `192.168.1.100`)
+- `MODBUS_SERVER_PORT` (default `504`)
+- `MODBUS_UNIT_ID` (default `1`)
+- `SLOT1_START_COIL` (default `10`)
+- `SLOT1_STOP_COIL` (default `11`)
+- `SLOT1_RUNNING_COIL` (default `20`)
+- `SLOT2_START_COIL` (default `12`)
+- `SLOT2_STOP_COIL` (default `13`)
+- `SLOT2_RUNNING_COIL` (default `21`)
+- `SLOT1_VIDEO` (default `Guide_steps.mp4`)
+- `SLOT2_VIDEO` (default `Process_step_3.mp4`)
+
+Example:
+
+```bash
+MODBUS_SERVER_IP=192.168.1.100 SLOT1_START_COIL=0 SLOT1_STOP_COIL=5 python flask_dual_control.py
+```
+
+### API Endpoints
+
+- `POST /api/slot/slot1/start`
+- `POST /api/slot/slot1/stop`
+- `POST /api/slot/slot2/start`
+- `POST /api/slot/slot2/stop`
+- `GET /api/status`
+- `GET /api/health`
