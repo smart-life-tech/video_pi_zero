@@ -74,6 +74,18 @@ SLOTS: Dict[str, SlotConfig] = {
 }
 
 
+def discover_video_files() -> list[str]:
+    root = os.path.dirname(os.path.abspath(__file__))
+    videos: list[str] = []
+    try:
+        for name in sorted(os.listdir(root)):
+            if name.lower().endswith(".mp4"):
+                videos.append(name)
+    except Exception:
+        pass
+    return videos
+
+
 modbus_client = ModbusTcpClient(MODBUS_SERVER_IP, port=MODBUS_SERVER_PORT, timeout=MODBUS_TIMEOUT_SECONDS)
 modbus_lock = threading.Lock()
 
@@ -122,7 +134,11 @@ def _read_running_status() -> Dict[str, bool]:
 
 @app.route("/")
 def index():
-    return render_template("dual_control.html", slots=SLOTS)
+    return render_template(
+        "dual_control.html",
+        slots=SLOTS,
+        available_videos=discover_video_files(),
+    )
 
 
 @app.route("/videos/<path:filename>")

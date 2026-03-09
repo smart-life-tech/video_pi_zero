@@ -84,9 +84,11 @@ Default filenames used:
 This project now includes a web dashboard for two helmet-wash slots with:
 
 - Split-screen live video panels
-- On-screen Start and Stop overlay buttons for each slot
+- On-screen Start and Stop overlay buttons anchored at bottom-left for each slot
 - PLC command write via Modbus TCP when buttons are pressed
 - Live running/idle status polling from PLC coils
+- Per-slot test button to play the configured slot video
+- Global Test All Videos button to cycle all local MP4 files on both slots
 
 ### Files
 

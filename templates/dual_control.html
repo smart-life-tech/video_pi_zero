@@ -9,7 +9,10 @@
   <body>
     <header class="topbar">
       <h1>Helmet Wash Live Control</h1>
-      <div id="connectionBadge" class="badge">Connecting...</div>
+      <div class="topbar-right">
+        <button id="testAllBtn" class="btn btn-test-global">Test All Videos</button>
+        <div id="connectionBadge" class="badge">Connecting...</div>
+      </div>
     </header>
 
     <main class="split-grid">
@@ -25,9 +28,15 @@
             <p class="slot-state" id="state-{{ slot_id }}">State: Unknown</p>
           </div>
 
-          <div class="controls">
-            <button class="btn btn-start" data-action="start" data-slot="{{ slot_id }}">Start</button>
-            <button class="btn btn-stop" data-action="stop" data-slot="{{ slot_id }}">Stop</button>
+          <div class="overlay-controls-left">
+            <div class="controls">
+              <button class="btn btn-start" data-action="start" data-slot="{{ slot_id }}">Start</button>
+              <button class="btn btn-stop" data-action="stop" data-slot="{{ slot_id }}">Stop</button>
+            </div>
+
+            <div class="test-controls">
+              <button class="btn btn-test" data-action="test-slot-video" data-slot="{{ slot_id }}">Test This Slot Video</button>
+            </div>
           </div>
 
           <p class="status-line" id="message-{{ slot_id }}">Ready</p>
@@ -36,6 +45,7 @@
       {% endfor %}
     </main>
 
+    <script id="videoCatalog" type="application/json">{{ available_videos | tojson }}</script>
     <script src="/static/dual_control.js"></script>
   </body>
 </html>

@@ -1,13 +1,77 @@
 const connectionBadge = document.getElementById('connectionBadge');
+const videoCatalogNode = document.getElementById('videoCatalog');
+const availableVideos = videoCatalogNode ? JSON.parse(videoCatalogNode.textContent) : [];
+
+let isTestingAll = false;
+
+function getSlotVideoElement(slot) {
+  const slotSection = document.querySelector(`.slot[data-slot-id="${slot}"]`);
+  return slotSection ? slotSection.querySelector('video.slot-video') : null;
+}
+
+function setSlotMessage(slot, text) {
+  const messageNode = document.getElementById(`message-${slot}`);
+  if (messageNode) {
+    messageNode.textContent = text;
+  }
+}
+
+async function testVideoOnSlot(slot, videoName) {
+  const video = getSlotVideoElement(slot);
+  if (!video) {
+    return;
+  }
+
+  const source = video.querySelector('source');
+  if (!source) {
+    return;
+  }
+
+  source.src = `/videos/${videoName}`;
+  video.load();
+  try {
+    await video.play();
+  } catch {
+    // Browser may block autoplay depending on environment.
+  }
+  setSlotMessage(slot, `Testing video: ${videoName}`);
+}
+
+async function testAllVideos() {
+  if (isTestingAll) {
+    return;
+  }
+  isTestingAll = true;
+
+  if (!availableVideos.length) {
+    Object.keys({ slot1: true, slot2: true }).forEach((slot) => {
+      setSlotMessage(slot, 'No .mp4 files found for testing');
+    });
+    isTestingAll = false;
+    return;
+  }
+
+  const slotIds = Array.from(document.querySelectorAll('.slot')).map((node) => node.dataset.slotId);
+  for (const videoName of availableVideos) {
+    for (const slotId of slotIds) {
+      await testVideoOnSlot(slotId, videoName);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+  }
+
+  slotIds.forEach((slotId) => {
+    setSlotMessage(slotId, 'Test All Videos complete');
+  });
+  isTestingAll = false;
+}
 
 async function sendControl(slot, action) {
-  const messageNode = document.getElementById(`message-${slot}`);
   const buttons = Array.from(document.querySelectorAll(`button[data-slot="${slot}"]`));
 
   buttons.forEach((btn) => {
     btn.disabled = true;
   });
-  messageNode.textContent = `Sending ${action.toUpperCase()} command...`;
+  setSlotMessage(slot, `Sending ${action.toUpperCase()} command...`);
 
   try {
     const response = await fetch(`/api/slot/${slot}/${action}`, {
@@ -20,10 +84,10 @@ async function sendControl(slot, action) {
       throw new Error(payload.error || 'Unknown PLC write error');
     }
 
-    messageNode.textContent = `${action.toUpperCase()} sent to coil ${payload.coil}`;
+    setSlotMessage(slot, `${action.toUpperCase()} sent to coil ${payload.coil}`);
     await refreshStatus();
   } catch (err) {
-    messageNode.textContent = `Error: ${err.message}`;
+    setSlotMessage(slot, `Error: ${err.message}`);
   } finally {
     buttons.forEach((btn) => {
       btn.disabled = false;
@@ -74,9 +138,34 @@ document.querySelectorAll('button[data-action][data-slot]').forEach((button) => 
   button.addEventListener('click', async () => {
     const slot = button.dataset.slot;
     const action = button.dataset.action;
+    if (action === 'test-slot-video') {
+      const response = await fetch('/api/status');
+      const payload = await response.json();
+      const videoName = payload?.slots?.[slot]?.video;
+      if (videoName) {
+        await testVideoOnSlot(slot, videoName);
+      } else {
+        setSlotMessage(slot, 'Could not determine slot video from API status');
+      }
+      return;
+    }
     await sendControl(slot, action);
   });
 });
+
+const testAllBtn = document.getElementById('testAllBtn');
+if (testAllBtn) {
+  testAllBtn.addEventListener('click', async () => {
+    testAllBtn.disabled = true;
+    testAllBtn.textContent = 'Testing...';
+    try {
+      await testAllVideos();
+    } finally {
+      testAllBtn.disabled = false;
+      testAllBtn.textContent = 'Test All Videos';
+    }
+  });
+}
 
 refreshStatus();
 setInterval(refreshStatus, 1000);

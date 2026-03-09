@@ -32,6 +32,12 @@ body {
   backdrop-filter: blur(4px);
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .topbar h1 {
   margin: 0;
   font-size: clamp(1.1rem, 3.2vw, 1.8rem);
@@ -85,9 +91,6 @@ body {
 .slot-overlay {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
   padding: 14px;
   background: linear-gradient(to top, rgba(5, 8, 11, 0.66), rgba(5, 8, 11, 0.16));
 }
@@ -102,9 +105,22 @@ body {
   color: var(--muted);
 }
 
+.overlay-controls-left {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .controls {
   display: flex;
   gap: 10px;
+}
+
+.test-controls {
+  display: flex;
 }
 
 .btn {
@@ -141,10 +157,20 @@ body {
   background: rgba(244, 96, 96, 0.28);
 }
 
+.btn-test,
+.btn-test-global {
+  background: rgba(242, 165, 65, 0.28);
+}
+
 .status-line {
-  margin: 10px 0 0;
+  margin: 0;
   color: #eff5f8;
   font-size: 0.95rem;
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  text-align: right;
+  max-width: 52%;
 }
 
 .state-running {
