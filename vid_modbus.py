@@ -6,7 +6,7 @@ import subprocess
 import shutil
 import sys
 import logging
-#import pwd
+import pwd
 
 try:
     from pymodbus.client import ModbusTcpClient
