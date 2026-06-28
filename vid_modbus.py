@@ -6,7 +6,7 @@ import subprocess
 import shutil
 import sys
 import logging
-import pwd
+#import pwd
 
 try:
     from pymodbus.client import ModbusTcpClient
@@ -115,6 +115,123 @@ VIDEO_FILES = {
     "Process_step_3": "Process_step_3.mp4",
 }
 
+# Keep a base mapping and current-language mapping
+VIDEO_FILES_BASE = VIDEO_FILES.copy()
+LANGUAGE = "en"
+
+def _language_filename(base_filename: str, lang: str) -> str:
+    if lang == "en":
+        return base_filename
+    name, ext = os.path.splitext(base_filename)
+    return f"{name}_es{ext}"
+
+def load_video_files_for_language(lang: str):
+    """Populate `VIDEO_FILES` mapping for the chosen language (filenames only)."""
+    global VIDEO_FILES
+    VIDEO_FILES = {}
+    if lang == "es":
+        # Exact Spanish filenames as provided by the user
+        VIDEO_FILES = {
+            "Process_step_1": "process_step1_spanish.mp4",
+            "Guide_steps": "Guide_steps_spanish.mp4",
+            "Warning": "warning_spanish.mp4",
+            "Process_step_2": "process_step2_spanish.mp4",
+            "Process_step_3": "process_step3_spanish.mp4",
+        }
+    else:
+        for k, v in VIDEO_FILES_BASE.items():
+            VIDEO_FILES[k] = _language_filename(v, lang)
+
+def load_video_paths_for_language(lang: str):
+    """Build AVAILABLE_VIDEO_PATHS and return ordered list of existing full paths for the chosen language."""
+    global AVAILABLE_VIDEO_PATHS
+    AVAILABLE_VIDEO_PATHS = {}
+    video_paths = []
+    for base in VIDEOS:
+        # base is e.g. 'Guide_steps.mp4' - try several candidate spanish filenames
+        name, ext = os.path.splitext(base)
+        candidates = []
+        if lang == "en":
+            candidates = [base]
+        else:
+            # common patterns: original name + _spanish, +_es, lowercase variations
+            candidates = [f"{name}_spanish{ext}", f"{name}_es{ext}", f"{name}_spanish{ext}".lower(), f"{name.replace('_','')}_spanish{ext}", f"{name.replace('_','')}_spanish{ext}".lower()]
+
+        # Always consider the base filename as a fallback
+        candidates.append(base)
+
+        found = False
+        for fname in candidates:
+            p = os.path.abspath(resolve_video_path(fname))
+            if os.path.exists(p):
+                video_paths.append(p)
+                AVAILABLE_VIDEO_PATHS[fname] = p
+                # ensure VIDEO_FILES mapping points to the actual filename used
+                VIDEO_FILES[name] = fname
+                found = True
+                break
+
+        if not found:
+            log.warning(f"Missing video for lang {lang}: tried {candidates}")
+    return video_paths
+
+def show_language_selector() -> str:
+    """Display a simple fullscreen language selector. Returns 'en' or 'es'."""
+    if not sys.platform.startswith("linux"):
+        # non-Linux: default to English
+        return "en"
+
+    try:
+        import tkinter as tk
+    except Exception:
+        log.warning("Tkinter not available; defaulting to English")
+        return "en"
+
+    selection = {"lang": None}
+
+    def choose(lang):
+        selection["lang"] = lang
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
+    root = tk.Tk()
+    root.title("Select Language")
+    root.configure(bg="#162" )
+    try:
+        root.attributes("-fullscreen", True)
+    except Exception:
+        pass
+
+    frame = tk.Frame(root, bg="#162")
+    frame.pack(expand=True, fill="both")
+
+    label = tk.Label(frame, text="Please select language", font=("Helvetica", 40), fg="white", bg="#162")
+    label.pack(pady=40)
+
+    btn_frame = tk.Frame(frame, bg="#162")
+    btn_frame.pack(expand=True)
+
+    btn_en = tk.Button(btn_frame, text="English", command=lambda: choose("en"), font=("Helvetica", 36), width=12, height=2, bg="#ffffff")
+    btn_en.grid(row=0, column=0, padx=40, pady=20)
+
+    btn_es = tk.Button(btn_frame, text="Español", command=lambda: choose("es"), font=("Helvetica", 36), width=12, height=2, bg="#ffffff")
+    btn_es.grid(row=0, column=1, padx=40, pady=20)
+
+    # Accessibility: allow Esc to quit and default to English
+    def on_key(event):
+        if event.keysym == "Escape":
+            choose("en")
+
+    root.bind_all("<Key>", on_key)
+
+    try:
+        root.mainloop()
+    except Exception:
+        pass
+
+    return selection.get("lang") or "en"
 MODBUS_SERVER_IP = os.environ.get("MODBUS_SERVER_IP", "192.168.1.100")
 MODBUS_SERVER_PORT = int(os.environ.get("MODBUS_SERVER_PORT", "504"))
 MODBUS_UNIT_ID = int(os.environ.get("MODBUS_UNIT_ID", "1"))
@@ -378,13 +495,23 @@ def switch_to_video(video_file: str):
         log.error(f"Target not available: {video_file}")
         print(f"Target not available: {video_file}")
         return
-
     # Keep VLC surface alive during Guide -> Step1 transition to avoid terminal flash.
-    soft_switch = current_video_file == "Guide_steps.mp4" and video_file == "Process_step_1.mp4"
+    def _base_name(fname: str) -> str:
+        if not fname:
+            return ""
+        b = os.path.splitext(os.path.basename(fname))[0]
+        # normalize common language suffixes
+        for sfx in ("_spanish", "_es"):
+            if b.endswith(sfx):
+                b = b[: -len(sfx)]
+        # also remove any lowercase/compact variants like 'guidesteps'
+        return b
+
+    soft_switch = _base_name(current_video_file) == "Guide_steps" and _base_name(video_file) == "Process_step_1"
     if not soft_switch:
         rc_many(["stop", "clear"], inter_command_delay=0.03)
 
-    if video_file in ("Guide_steps.mp4", "Warning.mp4"):
+    if _base_name(video_file) in ("Guide_steps", "Warning"):
         repeat_cmd = "repeat on"
     else:
         repeat_cmd = "repeat off"
@@ -404,16 +531,18 @@ def switch_to_video(video_file: str):
 
 
 def start_guide_idle():
-    """Force guide video to become visible immediately at startup."""
-    print("Startup: forcing Guide_steps.mp4 on screen")
-    log.info("Startup: forcing Guide_steps.mp4 on screen")
+    """Force guide video to become visible immediately at startup (language-aware)."""
+    fname = VIDEO_FILES.get("Guide_steps")
+    print(f"Startup: forcing {fname} on screen")
+    log.info(f"Startup: forcing {fname} on screen")
 
     ok = False
     for _ in range(3):
-        switch_to_video("Guide_steps.mp4")
-        ok = True
-        if ok:
-            break
+        if fname:
+            switch_to_video(fname)
+            ok = True
+            if ok:
+                break
         time.sleep(0.2)
 
     if ok:
@@ -423,6 +552,30 @@ def start_guide_idle():
     else:
         log.error("Guide startup failed")
         print("Guide startup failed")
+
+
+def start_guide_idle_spanish():
+    """Alias for Spanish guide startup; kept separate for clarity."""
+    fname = VIDEO_FILES.get("Guide_steps")
+    print(f"Startup (Spanish): forcing {fname} on screen")
+    log.info(f"Startup (Spanish): forcing {fname} on screen")
+
+    ok = False
+    for _ in range(3):
+        if fname:
+            switch_to_video(fname)
+            ok = True
+            if ok:
+                break
+        time.sleep(0.2)
+
+    if ok:
+        force_vlc_window_visible()
+        log.info("Guide startup (Spanish) asserted")
+        print("Guide startup (Spanish) asserted")
+    else:
+        log.error("Guide startup (Spanish) failed")
+        print("Guide startup (Spanish) failed")
 
 
 def can_trigger(action_name: str) -> bool:
@@ -564,21 +717,20 @@ def main():
         print("Startup aborted: X11 display is not accessible from this terminal session")
         return
 
-    global AVAILABLE_VIDEO_PATHS
-    AVAILABLE_VIDEO_PATHS = {}
-    video_paths = []
-    for v in VIDEOS:
-        p = os.path.abspath(resolve_video_path(v))
-        if os.path.exists(p):
-            video_paths.append(p)
-            AVAILABLE_VIDEO_PATHS[v] = p
-        else:
-            log.warning(f"Missing video: {p}")
+    # Let user choose language before launching VLC; then load language-specific videos
+    chosen_lang = show_language_selector()
+    LANGUAGE = chosen_lang
+    log.info(f"Language selected: {LANGUAGE}")
+
+    load_video_files_for_language(LANGUAGE)
+    video_paths = load_video_paths_for_language(LANGUAGE)
 
     if not video_paths:
-        log.error("No valid videos found")
-        print("No valid videos found")
+        log.error("No valid videos found for selected language")
+        print("No valid videos found for selected language")
         return
+
+    
 
     # Startup VLC + playlist with same method as vid_test
     print("Startup: launching VLC")
@@ -645,9 +797,26 @@ def main():
                 # Rising edge only
                 if current and not previous:
                     if can_trigger(action_name):
-                        video_file = VIDEO_FILES[action_name]
+                        video_file = VIDEO_FILES.get(action_name)
                         log.info(f"Rising edge coil {coil_addr}: {action_name} -> {video_file}")
                         switch_to_video(video_file)
+
+                        # If this was the final step, return to language selection screen
+                        if action_name == "Process_step_3":
+                            # brief pause to let the video start
+                            time.sleep(1.0)
+                            log.info("Final step reached; returning to language selector")
+                            chosen_lang = show_language_selector()
+                            LANGUAGE = chosen_lang
+                            load_video_files_for_language(LANGUAGE)
+                            video_paths = load_video_paths_for_language(LANGUAGE)
+                            if video_paths:
+                                build_playlist(video_paths)
+                                rebuild_playlist_index(video_paths)
+                                if LANGUAGE == "es":
+                                    start_guide_idle_spanish()
+                                else:
+                                    start_guide_idle()
 
                 last_states[idx] = current
 

@@ -9,3 +9,12 @@
 2026-02-21 13:18:39,649 - ERROR - Connection to (192.168.1.100, 504) failed: timed out
 2026-02-21 13:18:39,649 - ERROR - Failed to connect to Modbus server
 2026-02-21 13:18:39,650 - ERROR - Failed to establish initial Modbus connection
+2026-06-28 11:44:28,953 [INFO] Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)
+2026-06-28 11:45:07,824 [INFO] Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)
+2026-06-28 11:45:07,827 [ERROR] No usable .Xauthority found for GUI session
+2026-06-28 11:46:32,343 [INFO] Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)
+2026-06-28 11:46:32,343 [INFO] Language selected: en
+2026-06-28 11:46:32,410 [ERROR] cvlc not installed
+2026-06-28 11:47:11,201 [INFO] Starting merged vid_modbus (vid_test switch method + Modbus rising-edge trigger)
+2026-06-28 11:47:17,044 [INFO] Language selected: en
+2026-06-28 11:47:17,133 [ERROR] cvlc not installed
