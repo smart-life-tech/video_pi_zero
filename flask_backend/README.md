@@ -55,6 +55,11 @@ python app.py
 
 Server runs on `http://localhost:5000`
 
+Open `http://localhost:5000/dashboard` to monitor all provisioned machines. Set
+`DASHBOARD_TOKEN` in `.env`; the page sends it in a request header and does not use or expose
+individual machine access tokens. Machines are marked offline after `OFFLINE_AFTER_SECONDS`
+(900 seconds by default) without a heartbeat.
+
 **Production:**
 ```bash
 gunicorn -w 4 -b 0.0.0.0:5000 app:app

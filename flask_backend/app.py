@@ -3,12 +3,13 @@ Flask backend for liquid level monitoring system.
 Implements the API contract for machine status, push notifications, and device pairing.
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from datetime import datetime, timezone
 import math
 import re
 import hashlib
+import hmac
 import time
 from datetime import timedelta
 from typing import Optional
@@ -181,6 +182,38 @@ def create_app(config_class=Config):
         })
         response.headers['Cache-Control'] = 'no-store'
         return response, 200
+
+    @app.route('/api/v1/dashboard/machines', methods=['GET'])
+    def dashboard_machines():
+        """Return monitoring data for every provisioned machine."""
+        dashboard_token = app.config.get('DASHBOARD_TOKEN', '')
+        provided_token = request.headers.get('X-Dashboard-Token', '')
+        if not dashboard_token or not hmac.compare_digest(provided_token, dashboard_token):
+            return error_response('unauthorized', 'Dashboard token required'), 401
+
+        now = datetime.now(timezone.utc)
+        machines = []
+        for machine in Machine.query.order_by(Machine.name.asc()).all():
+            last_seen = machine.last_reading_at
+            if last_seen and last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            age = (now - last_seen).total_seconds() if last_seen else None
+            machines.append({
+                'machineId': machine.id,
+                'name': machine.name,
+                'state': machine.state,
+                'percent': machine.last_confirmed_percent,
+                'percentAvailable': machine.last_confirmed_percent is not None,
+                'lastSeenAt': last_seen.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if last_seen else None,
+                'updatedAt': machine.state_updated_at.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if machine.state_updated_at else None,
+                'signal': 'online' if age is not None and age <= app.config['OFFLINE_AFTER_SECONDS'] else 'offline',
+                'secondsSinceSeen': round(age) if age is not None else None,
+            })
+        return jsonify({'machines': machines, 'serverTime': now.strftime('%Y-%m-%dT%H:%M:%SZ')}), 200
+
+    @app.route('/dashboard', methods=['GET'])
+    def dashboard():
+        return render_template('dashboard.html')
     
     # ==================== PUSH SUBSCRIPTIONS ====================
     @app.route('/api/v1/push/subscriptions', methods=['POST'])

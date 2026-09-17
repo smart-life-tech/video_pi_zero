@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Machine Monitor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LIQUID LEVEL NETWORK</p>
+        <h1>Machine monitor</h1>
+      </div>
+      <div class="controls">
+        <label class="token-field">
+          <span>Dashboard token</span>
+          <input id="token" type="password" autocomplete="off" placeholder="Enter token">
+        </label>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <section class="summary" aria-label="Network summary">
+      <div><strong id="total">0</strong><span>machines</span></div>
+      <div><strong id="online">0</strong><span>online</span></div>
+      <div><strong id="attention">0</strong><span>need attention</span></div>
+      <p id="updated">Waiting for connection</p>
+    </section>
+
+    <p id="message" class="message" role="status">Enter the dashboard token to begin monitoring.</p>
+    <section id="machines" class="machine-grid" aria-live="polite"></section>
+  </main>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

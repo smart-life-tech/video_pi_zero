@@ -3,12 +3,20 @@
 import os
 from datetime import timedelta
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+except ImportError:
+    pass
+
 class Config:
     """Base configuration."""
     
     # Flask
     DEBUG = os.environ.get('FLASK_DEBUG', 'False') == 'True'
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+    DASHBOARD_TOKEN = os.environ.get('DASHBOARD_TOKEN', '')
+    OFFLINE_AFTER_SECONDS = int(os.environ.get('OFFLINE_AFTER_SECONDS', '900'))
     
     # Database
     SQLALCHEMY_DATABASE_URI = os.environ.get(
