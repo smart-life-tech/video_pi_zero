@@ -6,11 +6,21 @@ Implements the API contract for machine status, push notifications, and device p
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timezone
+import math
+import re
+import hashlib
+import time
+from datetime import timedelta
+from typing import Optional
+from sqlalchemy.exc import IntegrityError
 import os
 import logging
 
 from config import Config
-from models import db, Machine, PairingCode, Subscription, DeviceSecret, StatusReading
+from models import (
+    db, Machine, PairingCode, Subscription, DeviceSecret, StatusReading,
+    IngestRequest, RateLimitBucket,
+)
 from auth import verify_hmac_signature
 from state_machine import StateManager
 from push_notifications import PushNotificationManager
@@ -23,10 +33,24 @@ def create_app(config_class=Config):
     """Application factory pattern."""
     app = Flask(__name__)
     app.config.from_object(config_class)
+    if app.config.get('REQUIRE_PRODUCTION_SETTINGS'):
+        if not app.config.get('SECRET_KEY') or not os.environ.get('SECRET_KEY'):
+            raise RuntimeError('SECRET_KEY must be set in production')
+        if not app.config.get('VAPID_PRIVATE_KEY') or not os.environ.get('VAPID_PRIVATE_KEY'):
+            raise RuntimeError('VAPID_PRIVATE_KEY must be set in production')
+        database_url = os.environ.get('DATABASE_URL', '')
+        if not database_url.startswith(('postgresql://', 'postgresql+psycopg2://')):
+            raise RuntimeError('DATABASE_URL must use PostgreSQL in production')
     
     # Initialize extensions
     db.init_app(app)
-    CORS(app, resources={r"/api/*": {"origins": Config.CORS_ORIGINS}})
+    CORS(
+        app,
+        resources={r"/api/*": {
+            "origins": config_class.CORS_ORIGINS,
+            "expose_headers": ["Retry-After"],
+        }},
+    )
     
     # Initialize managers
     state_manager = StateManager(db)
@@ -34,6 +58,12 @@ def create_app(config_class=Config):
     
     with app.app_context():
         db.create_all()
+
+    @app.after_request
+    def apply_response_headers(response):
+        response.headers.setdefault('Cache-Control', 'no-store')
+        response.headers.setdefault('Access-Control-Expose-Headers', 'Retry-After')
+        return response
     
     # ==================== PAIRING ====================
     @app.route('/api/v1/pairing/redeem', methods=['POST'])
@@ -53,6 +83,12 @@ def create_app(config_class=Config):
             
             if not normalized:
                 return error_response('invalid_pairing_code', 'Invalid code format'), 404
+
+            client_ip = request.remote_addr or 'unknown'
+            for identity in (f'pairing-ip:{client_ip}', f'pairing-code:{normalized}'):
+                limited = enforce_rate_limit(identity, limit=5, window_seconds=3600)
+                if limited:
+                    return limited
             
             pairing = PairingCode.query.filter_by(code=normalized).first()
             
@@ -105,17 +141,28 @@ def create_app(config_class=Config):
         
         if resolved_machine_id != machine_id:
             return error_response('wrong_machine', 'Token does not match machine'), 403
+
+        limited = enforce_rate_limit(f'status:{resolved_machine_id}', limit=300, window_seconds=3600)
+        if limited:
+            return limited
         
         machine = Machine.query.get(machine_id)
         if not machine:
             return error_response('machine_not_found', 'Machine not found'), 404
         
+        def utc_string(value):
+            if value is None:
+                return None
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
         status_data = {
             'machineId': machine.id,
             'name': machine.name,
             'liquid': machine.get_confirmed_state(),
-            'lastSeenAt': machine.last_reading_at.isoformat() + 'Z' if machine.last_reading_at else None,
-            'updatedAt': machine.state_updated_at.isoformat() + 'Z' if machine.state_updated_at else None
+            'lastSeenAt': utc_string(machine.last_reading_at),
+            'updatedAt': utc_string(machine.state_updated_at)
         }
         
         response = jsonify(status_data)
@@ -151,20 +198,32 @@ def create_app(config_class=Config):
         
         if not machine_id:
             return error_response('unauthorized', 'Invalid token'), 401
+
+        limited = enforce_rate_limit(f'push:{machine_id}', limit=300, window_seconds=3600)
+        if limited:
+            return limited
         
         data = request.get_json()
         if not data or 'subscription' not in data:
             return error_response('invalid_subscription', 'Subscription required'), 400
         
         provided_machine_id = data.get('machineId')
-        if provided_machine_id and provided_machine_id != machine_id:
+        if provided_machine_id != machine_id:
             return error_response('wrong_machine', 'Token machine mismatch'), 403
         
         subscription = data['subscription']
         endpoint = subscription.get('endpoint')
-        
-        if not endpoint:
-            return error_response('invalid_subscription', 'Endpoint required'), 400
+        keys = subscription.get('keys')
+        platform = data.get('platform')
+        if (
+            not isinstance(endpoint, str)
+            or not endpoint.startswith('https://')
+            or not isinstance(keys, dict)
+            or not isinstance(keys.get('p256dh'), str)
+            or not isinstance(keys.get('auth'), str)
+            or platform not in {'ios', 'android', 'desktop', 'other'}
+        ):
+            return error_response('invalid_subscription', 'Invalid subscription'), 400
         
         # Upsert subscription
         sub = Subscription.query.filter_by(endpoint=endpoint).first()
@@ -174,16 +233,18 @@ def create_app(config_class=Config):
             sub = Subscription(
                 machine_id=machine_id,
                 endpoint=endpoint,
-                p256dh=subscription.get('keys', {}).get('p256dh'),
-                auth=subscription.get('keys', {}).get('auth'),
-                platform=data.get('platform', 'other')
+                p256dh=keys['p256dh'],
+                auth=keys['auth'],
+                platform=platform
             )
         else:
             # Update if exists
             sub.machine_id = machine_id
-            sub.p256dh = subscription.get('keys', {}).get('p256dh')
-            sub.auth = subscription.get('keys', {}).get('auth')
-            sub.platform = data.get('platform', 'other')
+            if sub.machine_id != machine_id:
+                return error_response('wrong_machine', 'Subscription belongs to another machine'), 403
+            sub.p256dh = keys['p256dh']
+            sub.auth = keys['auth']
+            sub.platform = platform
         
         db.session.add(sub)
         db.session.commit()
@@ -204,8 +265,13 @@ def create_app(config_class=Config):
             return error_response('unauthorized', 'Bearer token required'), 401
         
         token = auth_header[7:]
-        if not verify_access_token(token):
+        machine_id = verify_access_token(token)
+        if not machine_id:
             return error_response('unauthorized', 'Invalid token'), 401
+
+        limited = enforce_rate_limit(f'push-delete:{token}', limit=300, window_seconds=3600)
+        if limited:
+            return limited
         
         data = request.get_json()
         if not data or 'endpoint' not in data:
@@ -214,6 +280,8 @@ def create_app(config_class=Config):
         endpoint = data['endpoint']
         sub = Subscription.query.filter_by(endpoint=endpoint).first()
         if sub:
+            if sub.machine_id != machine_id:
+                return error_response('wrong_machine', 'Subscription belongs to another machine'), 403
             db.session.delete(sub)
             db.session.commit()
         
@@ -237,43 +305,87 @@ def create_app(config_class=Config):
         
         if not all([device_id, timestamp, key_id, signature]):
             return error_response('invalid_request', 'Missing required headers'), 422
+
+        try:
+            timestamp_int = int(timestamp)
+        except (TypeError, ValueError):
+            return error_response('unauthorized', 'Invalid timestamp'), 401
+        if not re.fullmatch(r'[0-9a-f]{64}', signature):
+            return error_response('unauthorized', 'Invalid signature format'), 401
         
         # Get raw body for signature verification
         raw_body = request.get_data()
         
         # Verify signature
-        is_valid, msg = verify_hmac_signature(device_id, int(timestamp), raw_body, signature, key_id)
+        is_valid, msg = verify_hmac_signature(device_id, timestamp_int, raw_body, signature, key_id)
         if not is_valid:
             return error_response('unauthorized', msg), 401
+
+        request_hash = hashlib.sha256(
+            b'\n'.join([
+                device_id.encode('utf-8'),
+                timestamp.encode('utf-8'),
+                key_id.encode('utf-8'),
+                signature.encode('ascii'),
+                raw_body,
+            ])
+        ).hexdigest()
+        db.session.add(IngestRequest(request_hash=request_hash))
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            return error_response('duplicate_request', 'Request already accepted'), 409
         
         # Parse body
         try:
-            data = request.get_json()
-        except:
+            data = request.get_json(silent=False)
+        except Exception:
             return error_response('invalid_request', 'Invalid JSON'), 422
+
+        if not isinstance(data, dict):
+            return error_response('invalid_request', 'JSON object required'), 422
         
         # Validate body
         if data.get('machineId') != device_id:
             return error_response('invalid_request', 'Device ID mismatch'), 422
         
-        liquid = data.get('liquid', {})
+        liquid = data.get('liquid')
+        if not isinstance(liquid, dict):
+            return error_response('invalid_request', 'Liquid object required'), 422
+
         state = liquid.get('state')
         percent = liquid.get('percent')
         
         if state not in ['ok', 'low']:
             return error_response('invalid_request', 'Invalid state value'), 422
         
-        if percent is not None and not (isinstance(percent, (int, float)) and 0 <= percent <= 100):
+        if percent is not None and not (
+            isinstance(percent, (int, float))
+            and not isinstance(percent, bool)
+            and math.isfinite(percent)
+            and 0 <= percent <= 100
+        ):
             return error_response('invalid_request', 'Invalid percent'), 422
         
         ts_str = data.get('ts')
-        firmware = data.get('firmware', '')
+        firmware = data.get('firmware')
+        if not isinstance(firmware, str) or not firmware:
+            return error_response('invalid_request', 'Firmware required'), 422
+
+        if not isinstance(ts_str, str) or not re.fullmatch(
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', ts_str
+        ):
+            return error_response('invalid_request', 'Invalid timestamp'), 422
+        try:
+            datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        except ValueError:
+            return error_response('invalid_request', 'Invalid timestamp'), 422
         
         # Get or create machine
         machine = Machine.query.get(device_id)
         if not machine:
-            machine = Machine(id=device_id, name=f"Machine {device_id}")
-            db.session.add(machine)
+            return error_response('unauthorized', 'Unknown device'), 401
         
         # Record the reading
         reading = StatusReading(
@@ -281,7 +393,7 @@ def create_app(config_class=Config):
             state=state,
             percent=percent,
             firmware=firmware,
-            timestamp=ts_str
+            pi_timestamp=datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
         )
         db.session.add(reading)
         
@@ -293,9 +405,11 @@ def create_app(config_class=Config):
         state_manager.process_reading(machine, reading)
         
         # Check if we need to send notifications
-        if machine.state != old_state:
+        if machine.state != old_state or machine.state == 'low':
             logger.info(f"Machine {device_id} state changed from {old_state} to {machine.state}")
-            push_manager.send_notifications_for_state_change(machine, machine.state)
+            push_manager.send_notifications_for_state_change(
+                machine, machine.state, previous_state=old_state
+            )
         
         db.session.commit()
         
@@ -313,14 +427,41 @@ def create_app(config_class=Config):
         return error_response('not_found', 'Streaming not available'), 404
     
     # ==================== HELPERS ====================
-    def error_response(code: str, message: str):
+    def error_response(code: str, message: str, retry_after: Optional[int] = None):
         """Standard error response format."""
-        return jsonify({
+        response = jsonify({
             'error': {
                 'code': code,
                 'message': message
             }
         })
+        response.headers['Cache-Control'] = 'no-store'
+        if retry_after is not None:
+            response.headers['Retry-After'] = str(retry_after)
+        return response
+
+    def enforce_rate_limit(identity: str, limit: int, window_seconds: int):
+        """Apply a fixed-window database-backed limit and return a 429 response when exceeded."""
+        now = datetime.now(timezone.utc)
+        window_start = now.replace(minute=0, second=0, microsecond=0)
+        if window_seconds != 3600:
+            epoch = int(now.timestamp())
+            window_start = datetime.fromtimestamp(
+                epoch - (epoch % window_seconds), tz=timezone.utc
+            )
+        bucket = RateLimitBucket.query.filter_by(
+            identity=identity, window_start=window_start
+        ).first()
+        if bucket is None:
+            bucket = RateLimitBucket(identity=identity, window_start=window_start, count=0)
+            db.session.add(bucket)
+        bucket.count += 1
+        if bucket.count > limit:
+            db.session.rollback()
+            retry_after = max(1, int((window_start + timedelta(seconds=window_seconds) - now).total_seconds()))
+            return error_response('rate_limited', 'Too many requests', retry_after), 429
+        db.session.commit()
+        return None
     
     def verify_access_token(token: str):
         """Verify Bearer token and return machine_id, or None if invalid."""
@@ -338,6 +479,14 @@ def create_app(config_class=Config):
         })
         response.headers['Cache-Control'] = 'no-store'
         return response, 404
+
+    @app.errorhandler(400)
+    def bad_request(e):
+        return error_response('invalid_request', 'Invalid request'), 400
+
+    @app.errorhandler(415)
+    def unsupported_media_type(e):
+        return error_response('invalid_request', 'Content-Type must be application/json'), 415
     
     @app.errorhandler(405)
     def method_not_allowed(e):

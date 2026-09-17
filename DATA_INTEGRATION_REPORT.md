@@ -7,6 +7,57 @@
 
 ## 📊 Data Requirements
 
+## Where the Seven API Endpoints Are Used
+
+`vid_modbus.py` is a machine-side sender. It must use **only one** endpoint:
+
+| Endpoint | Used by `vid_modbus.py`? | Owner |
+|---|---:|---|
+| `POST /api/v1/ingest/status` | **Yes** | Raspberry Pi sender; signed PLC reading |
+| `POST /api/v1/pairing/redeem` | No | Phone app during first pairing |
+| `GET /api/v1/machines/{machineId}/status` | No | Phone app polling the backend |
+| `GET /api/v1/push/vapid-public-key` | No | Phone app before Web Push subscription |
+| `POST /api/v1/push/subscriptions` | No | Phone app registering a browser/device |
+| `DELETE /api/v1/push/subscriptions` | No | Phone app disabling notifications |
+| `GET /api/v1/machines/{machineId}/stream` | No | Optional phone-app SSE; polling fallback is acceptable |
+
+The Pi should not redeem pairing codes, read app status, or manage Web Push subscriptions.
+Those operations belong to the phone app and backend. The Pi sends its reading to the backend;
+the phone app reads the confirmed state back from the backend.
+
+## `vid_modbus.py` Integration Added
+
+The controller now calls `POST /api/v1/ingest/status` after successful Modbus polls when
+`HW_API_BASE` is configured. It sends the exact contract payload, signs the exact serialized
+bytes with HMAC-SHA256, adds the required `X-HW-*` headers, posts roughly every five minutes
+with jitter, honors `Retry-After`, and retries network/429/5xx failures with backoff.
+
+Required environment values on the Pi:
+
+```bash
+HW_API_BASE=https://your-pythonanywhere-domain
+HW_DEVICE_ID=hw-000123
+HW_KEY_ID=v1
+HW_DEVICE_SECRET=the-secret-provisioned-for-this-machine
+FIRMWARE_VERSION=vid_modbus-1.0.0
+```
+
+Required PLC mapping values:
+
+```bash
+# Analog sensor, if available:
+LIQUID_LEVEL_REGISTER=100
+LIQUID_RAW_MIN=0
+LIQUID_RAW_MAX=4095
+
+# Digital low-level signal, if available:
+LIQUID_STATE_COIL=5
+```
+
+The numeric examples above are placeholders. Do not deploy them until the PLC register map is
+confirmed. If no analog level exists, leave `LIQUID_LEVEL_REGISTER` empty and provide
+`LIQUID_STATE_COIL`; the backend will receive `percent: null` and will not show the warn tier.
+
 The Flask backend needs to POST to `/api/v1/ingest/status` every 5 minutes:
 
 ```json

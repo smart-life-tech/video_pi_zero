@@ -78,10 +78,7 @@ class ProductionConfig(Config):
     """Production configuration (PythonAnywhere, etc)."""
     DEBUG = False
     TESTING = False
-    
-    # In production, these MUST be set via environment variables
-    assert os.environ.get('SECRET_KEY'), 'SECRET_KEY must be set in production'
-    assert os.environ.get('VAPID_PRIVATE_KEY'), 'VAPID_PRIVATE_KEY must be set in production'
+    REQUIRE_PRODUCTION_SETTINGS = True
 
 
 class TestingConfig(Config):

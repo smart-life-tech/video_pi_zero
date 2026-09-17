@@ -7,6 +7,16 @@ import shutil
 import sys
 import logging
 import pwd
+import hashlib
+import hmac
+import json
+import random
+from datetime import datetime, timezone
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 try:
     from pymodbus.client import ModbusTcpClient
@@ -240,6 +250,24 @@ MODBUS_POLL_INTERVAL_SECONDS = float(os.environ.get("MODBUS_POLL_INTERVAL", "0.1
 MODBUS_RECONNECT_DELAY_SECONDS = float(os.environ.get("MODBUS_RECONNECT_DELAY", "1.0"))
 TRIGGER_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "0.8"))
 MODBUS_READ_FAIL_RECONNECT_THRESHOLD = int(os.environ.get("MODBUS_READ_FAIL_RECONNECT_THRESHOLD", "30"))
+
+# Backend ingest configuration. The liquid PLC addresses must be supplied by the PLC integrator.
+BACKEND_API_BASE = os.environ.get("HW_API_BASE", "").rstrip("/")
+BACKEND_INGEST_PATH = "/api/v1/ingest/status"
+HW_DEVICE_ID = os.environ.get("HW_DEVICE_ID", "")
+HW_KEY_ID = os.environ.get("HW_KEY_ID", "v1")
+HW_DEVICE_SECRET = os.environ.get("HW_DEVICE_SECRET", "")
+FIRMWARE_VERSION = os.environ.get("FIRMWARE_VERSION", "vid_modbus-1.0.0")
+BACKEND_POST_INTERVAL_SECONDS = int(os.environ.get("READING_INTERVAL_SECONDS", "300"))
+BACKEND_POST_JITTER_SECONDS = int(os.environ.get("READING_JITTER_SECONDS", "30"))
+backend_next_post_time = 0.0
+backend_backoff_seconds = 5
+
+# PLC liquid mapping. Leave LIQUID_LEVEL_REGISTER empty for a digital-only sensor.
+LIQUID_LEVEL_REGISTER = os.environ.get("LIQUID_LEVEL_REGISTER", "")
+LIQUID_STATE_COIL = os.environ.get("LIQUID_STATE_COIL", "")
+LIQUID_RAW_MIN = float(os.environ.get("LIQUID_RAW_MIN", "0"))
+LIQUID_RAW_MAX = float(os.environ.get("LIQUID_RAW_MAX", "4095"))
 
 ETH_INTERFACE = os.environ.get("ETH_INTERFACE", "eth0")
 PI_STATIC_IP_CIDR = os.environ.get("PI_STATIC_IP_CIDR", "192.168.1.10/24")
@@ -677,6 +705,129 @@ def read_coils():
     global last_network_reassert_time
     if not modbus_client:
         return None
+
+
+def _raw_level_to_percent(raw_value: int):
+    if LIQUID_RAW_MAX <= LIQUID_RAW_MIN:
+        raise ValueError("LIQUID_RAW_MAX must be greater than LIQUID_RAW_MIN")
+    percent = (raw_value - LIQUID_RAW_MIN) / (LIQUID_RAW_MAX - LIQUID_RAW_MIN) * 100
+    return max(0, min(100, round(percent)))
+
+
+def read_liquid_status():
+    """Read the configured liquid level and return (state, percent).
+
+    The PLC address mapping is intentionally configuration-driven. A digital low
+    coil is required when no analog level register is configured.
+    """
+    if not LIQUID_LEVEL_REGISTER and not LIQUID_STATE_COIL:
+        raise RuntimeError(
+            "Set LIQUID_LEVEL_REGISTER or LIQUID_STATE_COIL before enabling backend ingest"
+        )
+
+    percent = None
+    if LIQUID_LEVEL_REGISTER:
+        result = modbus_client.read_holding_registers(
+            int(LIQUID_LEVEL_REGISTER), count=1, slave=MODBUS_UNIT_ID
+        )
+        if result.isError():
+            raise RuntimeError(f"Liquid level register read failed: {result}")
+        percent = _raw_level_to_percent(result.registers[0])
+
+    if LIQUID_STATE_COIL:
+        result = modbus_client.read_coils(
+            int(LIQUID_STATE_COIL), count=1, slave=MODBUS_UNIT_ID
+        )
+        if result.isError():
+            raise RuntimeError(f"Liquid state coil read failed: {result}")
+        state = "low" if bool(result.bits[0]) else "ok"
+    elif percent is not None:
+        state = "low" if percent <= 10 else "ok"
+    else:
+        raise RuntimeError("LIQUID_STATE_COIL is required without a level register")
+
+    return state, percent
+
+
+def _backend_signature(timestamp: int, raw_body: bytes) -> str:
+    body_hash = hashlib.sha256(raw_body).hexdigest()
+    canonical = "\n".join([
+        "POST",
+        BACKEND_INGEST_PATH,
+        str(timestamp),
+        HW_DEVICE_ID,
+        body_hash,
+    ])
+    return hmac.new(
+        HW_DEVICE_SECRET.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def post_liquid_status(state: str, percent):
+    """Send one signed liquid reading to the backend; return the HTTP response."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; install requests on the Pi")
+    if not all((BACKEND_API_BASE, HW_DEVICE_ID, HW_DEVICE_SECRET)):
+        raise RuntimeError("Set HW_API_BASE, HW_DEVICE_ID, and HW_DEVICE_SECRET")
+
+    payload = {
+        "machineId": HW_DEVICE_ID,
+        "liquid": {"state": state, "percent": percent},
+        "firmware": FIRMWARE_VERSION,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    timestamp = int(time.time())
+    return requests.post(
+        BACKEND_API_BASE + BACKEND_INGEST_PATH,
+        data=raw_body,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-HW-Device-Id": HW_DEVICE_ID,
+            "X-HW-Timestamp": str(timestamp),
+            "X-HW-Key-Id": HW_KEY_ID,
+            "X-HW-Signature": _backend_signature(timestamp, raw_body),
+        },
+        timeout=10,
+    )
+
+
+def maybe_post_liquid_status():
+    """Post at a jittered five-minute interval without blocking video control."""
+    global backend_next_post_time, backend_backoff_seconds
+    if not BACKEND_API_BASE:
+        return
+
+    now = time.time()
+    if now < backend_next_post_time:
+        return
+
+    try:
+        state, percent = read_liquid_status()
+        response = post_liquid_status(state, percent)
+        if response.status_code == 202:
+            log.info(f"Backend reading accepted: state={state} percent={percent}")
+            backend_backoff_seconds = 5
+            wait = BACKEND_POST_INTERVAL_SECONDS + random.randint(
+                -BACKEND_POST_JITTER_SECONDS, BACKEND_POST_JITTER_SECONDS
+            )
+        elif response.status_code == 429 or response.status_code >= 500:
+            retry_after = response.headers.get("Retry-After", "")
+            wait = int(retry_after) if retry_after.isdigit() else backend_backoff_seconds
+            backend_backoff_seconds = min(backend_backoff_seconds * 2, 300)
+            log.warning(f"Temporary backend response {response.status_code}; retry in {wait}s")
+        else:
+            wait = BACKEND_POST_INTERVAL_SECONDS
+            backend_backoff_seconds = 5
+            log.error(f"Permanent backend response {response.status_code}: {response.text[:300]}")
+    except Exception as exc:
+        wait = backend_backoff_seconds
+        backend_backoff_seconds = min(backend_backoff_seconds * 2, 300)
+        log.warning(f"Backend reading failed; retry in {wait}s: {exc}")
+
+    backend_next_post_time = time.time() + max(1, wait)
     try:
         # Match known-stable modbus_test.py behavior.
         result = modbus_client.read_coils(0, count=5)
@@ -789,6 +940,10 @@ def main():
                 continue
 
             read_fail_streak = 0
+
+            # The Pi talks to the backend only through the signed ingest endpoint.
+            # Backend/level-read failures must not stop local video control.
+            maybe_post_liquid_status()
 
             for idx, (action_name, coil_addr) in enumerate(MODBUS_COILS.items()):
                 current = bool(states[idx])

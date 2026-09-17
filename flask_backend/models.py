@@ -89,7 +89,10 @@ class PairingCode(db.Model):
         """Check if code is still valid."""
         if self.redeemed:
             return False
-        if datetime.now(timezone.utc) > self.expires_at:
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
             return False
         return True
     
@@ -164,7 +167,10 @@ class AccessToken(db.Model):
     
     def is_valid(self):
         """Check if token is still valid."""
-        if datetime.now(timezone.utc) > self.expires_at:
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
             return False
         return True
     
@@ -190,3 +196,20 @@ class NotificationLog(db.Model):
     
     def __repr__(self):
         return f'<NotificationLog {self.machine_id} {self.state_change}>'
+
+
+class IngestRequest(db.Model):
+    """Recently accepted signed ingest requests, used to reject replays."""
+    __tablename__ = 'ingest_requests'
+
+    request_hash = db.Column(db.String(64), primary_key=True)
+    received_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class RateLimitBucket(db.Model):
+    """A fixed-window rate-limit counter shared by all app workers."""
+    __tablename__ = 'rate_limit_buckets'
+
+    identity = db.Column(db.String(255), primary_key=True)
+    window_start = db.Column(db.DateTime(timezone=True), primary_key=True)
+    count = db.Column(db.Integer, nullable=False, default=0)

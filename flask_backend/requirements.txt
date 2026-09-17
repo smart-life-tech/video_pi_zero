@@ -1,9 +1,11 @@
 Flask==3.0.0
 Flask-SQLAlchemy==3.1.1
+psycopg2-binary==2.9.9
 Flask-CORS==4.0.0
 python-dotenv==1.0.0
-PyJWT==2.8.1
+PyJWT==2.8.0
 pywebpush==1.14.0
 requests==2.31.0
+pymodbus==3.8.6
 Werkzeug==3.0.1
 gunicorn==21.2.0

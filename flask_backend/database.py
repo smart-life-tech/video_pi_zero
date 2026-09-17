@@ -68,7 +68,7 @@ def generate_pairing_code(machine_id: str, count: int = 1) -> list:
             code = ''.join(secrets.choice(string.ascii_uppercase) for _ in range(3))
             code += '-' + ''.join(secrets.choice(string.digits) for _ in range(4))
             
-            pairing = PairingCode(code=code, machine_id=machine_id)
+            pairing = PairingCode(code=code.replace('-', ''), machine_id=machine_id)
             db.session.add(pairing)
             codes.append(code)
         

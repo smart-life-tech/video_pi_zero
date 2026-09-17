@@ -59,72 +59,63 @@ class StateManager:
         """
         current_state = machine.state
         
-        # Get last 3 readings to check for state change consensus
+        # The reading is already pending in the session; this query autoflushes it.
         recent = StatusReading.query.filter_by(
             machine_id=machine.id
         ).order_by(StatusReading.received_at.desc()).limit(3).all()
-        
-        if not recent:
+
+        if len(recent) < self.thresholds['consecutive_readings']:
             return current_state
         
-        readings = list(reversed(recent))  # Oldest first
-        
-        # If percent is None, never enter warn state
-        if new_reading.percent is None:
-            if current_state == 'warn':
-                # Can't stay in warn with no sensor, drop to ok
-                return 'ok'
-            return current_state
-        
-        # Check if we have enough consensus
-        consensus_readings = readings  # Include new reading implicitly
+        readings = list(reversed(recent))
+        count = self.thresholds['consecutive_readings']
+
+        def all_readings(predicate):
+            return len(readings) == count and all(predicate(item) for item in readings)
         
         # State machine logic
         if current_state == 'ok':
-            # Try to transition to warn
-            if new_reading.percent <= self.thresholds['ok_to_warn']:
-                # Check if last readings also triggered this
-                if len(readings) >= 1 and readings[-1].percent is not None:
-                    if readings[-1].percent <= self.thresholds['ok_to_warn']:
-                        logger.info(f'Transitioning {machine.id} to warn (percent={new_reading.percent})')
-                        return 'warn'
+            if all_readings(
+                lambda item: item.percent is not None
+                and item.percent <= self.thresholds['ok_to_warn']
+            ):
+                logger.info(f'Transitioning {machine.id} to warn (percent={new_reading.percent})')
+                return 'warn'
+            # A sensorless machine can still report an explicit low state.
+            if all_readings(lambda item: item.percent is None and item.state == 'low'):
+                return 'low'
             return 'ok'
         
         elif current_state == 'warn':
             # Try to transition to low
-            if (new_reading.percent <= self.thresholds['warn_to_low'] and 
-                new_reading.state == 'low'):
-                if len(readings) >= 1:
-                    last = readings[-1]
-                    if (last.percent is not None and 
-                        last.percent <= self.thresholds['warn_to_low'] and
-                        last.state == 'low'):
-                        logger.info(f'Transitioning {machine.id} to low (percent={new_reading.percent})')
-                        return 'low'
-                return 'warn'
+            if all_readings(
+                lambda item: item.state == 'low'
+                and item.percent is not None
+                and item.percent <= self.thresholds['warn_to_low']
+            ):
+                logger.info(f'Transitioning {machine.id} to low (percent={new_reading.percent})')
+                return 'low'
             
             # Try to transition back to ok
-            if (new_reading.percent >= self.thresholds['warn_to_ok'] and 
-                new_reading.state == 'ok'):
-                if len(readings) >= 1:
-                    last = readings[-1]
-                    if (last.percent is not None and 
-                        last.percent >= self.thresholds['warn_to_ok'] and
-                        last.state == 'ok'):
-                        logger.info(f'Transitioning {machine.id} to ok (percent={new_reading.percent})')
-                        return 'ok'
+            if all_readings(
+                lambda item: item.state == 'ok'
+                and item.percent is not None
+                and item.percent >= self.thresholds['warn_to_ok']
+            ):
+                logger.info(f'Transitioning {machine.id} to ok (percent={new_reading.percent})')
+                return 'ok'
             
             return 'warn'
         
         elif current_state == 'low':
-            # Try to transition back to warn
-            if new_reading.percent >= self.thresholds['low_to_warn']:
-                if len(readings) >= 1:
-                    last = readings[-1]
-                    if (last.percent is not None and 
-                        last.percent >= self.thresholds['low_to_warn']):
-                        logger.info(f'Transitioning {machine.id} to warn (percent={new_reading.percent})')
-                        return 'warn'
+            if all_readings(
+                lambda item: item.percent is not None
+                and item.percent >= self.thresholds['low_to_warn']
+            ):
+                logger.info(f'Transitioning {machine.id} to warn (percent={new_reading.percent})')
+                return 'warn'
+            if all_readings(lambda item: item.percent is None and item.state == 'ok'):
+                return 'ok'
             
             return 'low'
         

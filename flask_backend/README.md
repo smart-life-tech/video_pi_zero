@@ -119,14 +119,32 @@ gunicorn -w 4 -b 0.0.0.0:5000 app:app
 
 ### Database
 
-For small deployments, SQLite works fine. For production scale, use PostgreSQL:
+For local development, SQLite is used by default. Production configuration requires PostgreSQL:
 
 ```bash
-# In PythonAnywhere bash
-pip install psycopg2-binary
+# The PostgreSQL driver is already included
+pip install -r requirements.txt
 ```
 
-Then set `DATABASE_URL=postgresql://user:pass@host/dbname`
+Set `FLASK_ENV=production` and `DATABASE_URL=postgresql://user:pass@host/dbname`.
+
+## Raspberry Pi Sender
+
+Copy `pi_sender.env.example` to `/etc/liquid-level-sender.env`, fill in the API/device values,
+and set the PLC register/coil addresses supplied by the PLC integrator. Install the sender and
+service with:
+
+```bash
+sudo mkdir -p /opt/liquid-level-sender
+sudo cp pi_sender.py /opt/liquid-level-sender/
+sudo cp systemd/liquid-level-sender.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now liquid-level-sender
+sudo systemctl status liquid-level-sender
+```
+
+The sender posts every five minutes with jitter, signs the exact request bytes with HMAC-SHA256,
+does not retry permanent 4xx responses, and retries `429`/`5xx` or network failures with backoff.
 
 ## Machine Provisioning
 

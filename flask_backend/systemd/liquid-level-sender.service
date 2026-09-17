@@ -1,0 +1,21 @@
+[Unit]
+Description=Liquid level Raspberry Pi API sender
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/liquid-level-sender
+EnvironmentFile=/etc/liquid-level-sender.env
+ExecStart=/opt/liquid-level-sender/venv/bin/python /opt/liquid-level-sender/pi_sender.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/liquid-level-sender
+
+[Install]
+WantedBy=multi-user.target

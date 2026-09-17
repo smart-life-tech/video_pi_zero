@@ -5,6 +5,7 @@ from config import Config
 from datetime import datetime, timezone, timedelta
 import logging
 import json
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,9 @@ class PushNotificationManager:
         self.vapid_private = Config.VAPID_PRIVATE_KEY
         self.vapid_email = Config.VAPID_ADMIN_EMAIL
     
-    def send_notifications_for_state_change(self, machine: Machine, new_state: str):
+    def send_notifications_for_state_change(
+        self, machine: Machine, new_state: str, previous_state: Optional[str] = None
+    ):
         """
         Send notifications to subscribed devices when machine state changes.
         
@@ -41,7 +44,7 @@ class PushNotificationManager:
             return
         
         # Determine if we should notify
-        should_notify = self._should_notify(machine, new_state)
+        should_notify = self._should_notify(machine, new_state, previous_state)
         
         if not should_notify:
             logger.info(f'Skipping notification for {machine.id} -> {new_state}')
@@ -58,7 +61,9 @@ class PushNotificationManager:
         machine.last_notification_at = datetime.now(timezone.utc)
         db.session.commit()
     
-    def _should_notify(self, machine: Machine, new_state: str) -> bool:
+    def _should_notify(
+        self, machine: Machine, new_state: str, previous_state: Optional[str] = None
+    ) -> bool:
         """
         Determine if we should send a notification.
         
@@ -67,7 +72,7 @@ class PushNotificationManager:
         - Only notify on rise if it's been 12+ hours since last notification
         - Never notify on ok (no notification on recovery)
         """
-        old_state = machine.state
+        old_state = previous_state if previous_state is not None else machine.state
         
         # Map state transitions
         is_drop = (
@@ -76,14 +81,12 @@ class PushNotificationManager:
         )
         
         if not is_drop:
-            # Check if it's been 12 hours for a reminder
-            if new_state == 'low' and machine.last_notification_at:
-                elapsed = datetime.now(timezone.utc) - machine.last_notification_at
-                min_interval = timedelta(hours=12)
-                if elapsed < min_interval:
-                    return False
-            else:
+            if new_state != 'low':
                 return False
+            if machine.last_notification_at:
+                elapsed = datetime.now(timezone.utc) - machine.last_notification_at
+                if elapsed < timedelta(hours=12):
+                    return False
         
         return True
     

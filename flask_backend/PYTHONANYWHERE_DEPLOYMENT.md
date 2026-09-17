@@ -62,7 +62,7 @@ nano .env
 ```
 FLASK_ENV=production
 SECRET_KEY=<generate-random-string-here>
-DATABASE_URL=sqlite:////home/username/mysite/backend.db
+DATABASE_URL=postgresql://username:password@host/database
 FRONTEND_ORIGIN=https://yourdomain.com
 VAPID_PUBLIC_KEY=<your-public-key>
 VAPID_PRIVATE_KEY=<your-private-key>
@@ -217,14 +217,14 @@ Your SQLite database is at:
 cp /home/username/mysite/backend.db /home/username/mysite/backend.db.backup
 ```
 
-## Switching to PostgreSQL (Production)
+## PostgreSQL Production Database
 
-For higher scale, use PostgreSQL instead of SQLite:
+Production configuration requires PostgreSQL:
 
 1. PythonAnywhere offers PostgreSQL databases (paid plans)
-2. Install driver: `pip install psycopg2-binary`
-3. Set `DATABASE_URL=postgresql://user:password@host/dbname`
-4. Reload web app
+2. The PostgreSQL driver is included in `requirements.txt`.
+3. Set `FLASK_ENV=production` and `DATABASE_URL=postgresql://user:password@host/dbname`.
+4. Run `python database.py init` against that database, then reload the web app.
 
 ## Monitoring and Logs
 
