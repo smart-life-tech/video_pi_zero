@@ -48,7 +48,7 @@ def create_app(config_class=Config):
                     'ALLOW_SQLITE_PRODUCTION=True'
                 )
     
-    # Initialize extensions
+    # Initialize extensions======
     db.init_app(app)
     CORS(
         app,
