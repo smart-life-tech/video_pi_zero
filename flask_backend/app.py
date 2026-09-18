@@ -40,8 +40,13 @@ def create_app(config_class=Config):
         if not app.config.get('VAPID_PRIVATE_KEY') or not os.environ.get('VAPID_PRIVATE_KEY'):
             raise RuntimeError('VAPID_PRIVATE_KEY must be set in production')
         database_url = os.environ.get('DATABASE_URL', '')
+        sqlite_allowed = os.environ.get('ALLOW_SQLITE_PRODUCTION', 'False') == 'True'
         if not database_url.startswith(('postgresql://', 'postgresql+psycopg2://')):
-            raise RuntimeError('DATABASE_URL must use PostgreSQL in production')
+            if not sqlite_allowed or not database_url.startswith('sqlite:///'):
+                raise RuntimeError(
+                    'DATABASE_URL must use PostgreSQL in production unless '
+                    'ALLOW_SQLITE_PRODUCTION=True'
+                )
     
     # Initialize extensions
     db.init_app(app)

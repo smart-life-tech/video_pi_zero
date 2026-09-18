@@ -62,7 +62,8 @@ nano .env
 ```
 FLASK_ENV=production
 SECRET_KEY=<generate-random-string-here>
-DATABASE_URL=postgresql://username:password@host/database
+DATABASE_URL=sqlite:////home/username/mysite/backend.db
+ALLOW_SQLITE_PRODUCTION=True
 FRONTEND_ORIGIN=https://yourdomain.com
 VAPID_PUBLIC_KEY=<your-public-key>
 VAPID_PRIVATE_KEY=<your-private-key>
@@ -217,9 +218,16 @@ Your SQLite database is at:
 cp /home/username/mysite/backend.db /home/username/mysite/backend.db.backup
 ```
 
-## PostgreSQL Production Database
+## Database Options
 
-Production configuration requires PostgreSQL:
+For the PythonAnywhere free plan, use SQLite on the persistent home directory:
+
+```
+DATABASE_URL=sqlite:////home/username/mysite/backend.db
+ALLOW_SQLITE_PRODUCTION=True
+```
+
+SQLite is suitable for a low-traffic single-worker deployment. Paid plans can use PostgreSQL:
 
 1. PythonAnywhere offers PostgreSQL databases (paid plans)
 2. The PostgreSQL driver is included in `requirements.txt`.
