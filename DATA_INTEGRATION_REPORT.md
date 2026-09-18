@@ -50,13 +50,15 @@ LIQUID_LEVEL_REGISTER=100
 LIQUID_RAW_MIN=0
 LIQUID_RAW_MAX=4095
 
-# Digital low-level signal, if available:
-LIQUID_STATE_COIL=5
+# The existing Warning video coil is the digital low-level signal:
+LIQUID_STATE_COIL=2
 ```
 
-The numeric examples above are placeholders. Do not deploy them until the PLC register map is
-confirmed. If no analog level exists, leave `LIQUID_LEVEL_REGISTER` empty and provide
-`LIQUID_STATE_COIL`; the backend will receive `percent: null` and will not show the warn tier.
+The confirmed mapping uses the existing Warning video coil at address `2`. `vid_modbus.py` now
+reuses that coil from its normal five-coil poll, so no extra PLC read is needed. Leave
+`LIQUID_LEVEL_REGISTER` empty; the backend receives `percent: null` and will show only `ok` or
+`low`, not the `warn` tier. If the PLC address differs from `2`, set `LIQUID_STATE_COIL` to the
+actual address and ensure the controller polls that address.
 
 The Flask backend needs to POST to `/api/v1/ingest/status` every 5 minutes:
 

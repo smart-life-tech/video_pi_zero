@@ -263,9 +263,10 @@ BACKEND_POST_JITTER_SECONDS = int(os.environ.get("READING_JITTER_SECONDS", "30")
 backend_next_post_time = 0.0
 backend_backoff_seconds = 5
 
-# PLC liquid mapping. Leave LIQUID_LEVEL_REGISTER empty for a digital-only sensor.
+# The Warning video coil is also the PLC's digital low-level report.
+# Leave LIQUID_LEVEL_REGISTER empty because this machine has no percentage sensor.
 LIQUID_LEVEL_REGISTER = os.environ.get("LIQUID_LEVEL_REGISTER", "")
-LIQUID_STATE_COIL = os.environ.get("LIQUID_STATE_COIL", "")
+LIQUID_STATE_COIL = os.environ.get("LIQUID_STATE_COIL", str(MODBUS_COILS["Warning"]))
 LIQUID_RAW_MIN = float(os.environ.get("LIQUID_RAW_MIN", "0"))
 LIQUID_RAW_MAX = float(os.environ.get("LIQUID_RAW_MAX", "4095"))
 
@@ -714,16 +715,14 @@ def _raw_level_to_percent(raw_value: int):
     return max(0, min(100, round(percent)))
 
 
-def read_liquid_status():
+def read_liquid_status(coil_states=None):
     """Read the configured liquid level and return (state, percent).
 
     The PLC address mapping is intentionally configuration-driven. A digital low
     coil is required when no analog level register is configured.
     """
-    if not LIQUID_LEVEL_REGISTER and not LIQUID_STATE_COIL:
-        raise RuntimeError(
-            "Set LIQUID_LEVEL_REGISTER or LIQUID_STATE_COIL before enabling backend ingest"
-        )
+    if not LIQUID_STATE_COIL and not LIQUID_LEVEL_REGISTER:
+        raise RuntimeError("Configure a liquid state coil or level register")
 
     percent = None
     if LIQUID_LEVEL_REGISTER:
@@ -734,7 +733,14 @@ def read_liquid_status():
             raise RuntimeError(f"Liquid level register read failed: {result}")
         percent = _raw_level_to_percent(result.registers[0])
 
-    if LIQUID_STATE_COIL:
+    if LIQUID_STATE_COIL and coil_states is not None:
+        warning_coil_address = int(LIQUID_STATE_COIL)
+        if warning_coil_address >= len(coil_states):
+            raise RuntimeError(
+                f"LIQUID_STATE_COIL {warning_coil_address} is outside the polled coil range"
+            )
+        state = "low" if bool(coil_states[warning_coil_address]) else "ok"
+    elif LIQUID_STATE_COIL:
         result = modbus_client.read_coils(
             int(LIQUID_STATE_COIL), count=1, slave=MODBUS_UNIT_ID
         )
@@ -794,7 +800,7 @@ def post_liquid_status(state: str, percent):
     )
 
 
-def maybe_post_liquid_status():
+def maybe_post_liquid_status(coil_states=None):
     """Post at a jittered five-minute interval without blocking video control."""
     global backend_next_post_time, backend_backoff_seconds
     if not BACKEND_API_BASE:
@@ -805,7 +811,7 @@ def maybe_post_liquid_status():
         return
 
     try:
-        state, percent = read_liquid_status()
+        state, percent = read_liquid_status(coil_states)
         response = post_liquid_status(state, percent)
         if response.status_code == 202:
             log.info(f"Backend reading accepted: state={state} percent={percent}")
@@ -943,7 +949,7 @@ def main():
 
             # The Pi talks to the backend only through the signed ingest endpoint.
             # Backend/level-read failures must not stop local video control.
-            maybe_post_liquid_status()
+            maybe_post_liquid_status(states)
 
             for idx, (action_name, coil_addr) in enumerate(MODBUS_COILS.items()):
                 current = bool(states[idx])
