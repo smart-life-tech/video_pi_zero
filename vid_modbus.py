@@ -252,11 +252,11 @@ TRIGGER_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "0.8
 MODBUS_READ_FAIL_RECONNECT_THRESHOLD = int(os.environ.get("MODBUS_READ_FAIL_RECONNECT_THRESHOLD", "30"))
 
 # Backend ingest configuration. The liquid PLC addresses must be supplied by the PLC integrator.
-BACKEND_API_BASE = os.environ.get("HW_API_BASE", "").rstrip("/")
+BACKEND_API_BASE = os.environ.get("HW_API_BASE", "https://peterpeterlight.pythonanywhere.com").rstrip("/")
 BACKEND_INGEST_PATH = "/api/v1/ingest/status"
-HW_DEVICE_ID = os.environ.get("HW_DEVICE_ID", "")
+HW_DEVICE_ID = os.environ.get("HW_DEVICE_ID", "hw-000123")
 HW_KEY_ID = os.environ.get("HW_KEY_ID", "v1")
-HW_DEVICE_SECRET = os.environ.get("HW_DEVICE_SECRET", "")
+HW_DEVICE_SECRET = os.environ.get("HW_DEVICE_SECRET", "1234567890")
 FIRMWARE_VERSION = os.environ.get("FIRMWARE_VERSION", "vid_modbus-1.0.0")
 BACKEND_POST_INTERVAL_SECONDS = int(os.environ.get("READING_INTERVAL_SECONDS", "300"))
 BACKEND_POST_JITTER_SECONDS = int(os.environ.get("READING_JITTER_SECONDS", "30"))

@@ -14,7 +14,7 @@ Complete step-by-step guide to deploy the Flask backend to PythonAnywhere.
 1. Log in to [pythonanywhere.com](https://www.pythonanywhere.com/)
 2. Click "Web" in the top menu
 3. Click "Add a new web app"
-4. Choose domain name (e.g., `username.pythonanywhere.com`)
+4. Choose domain name (e.g., `peterpeterlight.pythonanywhere.com`)
 5. Select **Flask** and **Python 3.9+** (or higher)
 6. Finish the wizard
 
@@ -24,8 +24,8 @@ Complete step-by-step guide to deploy the Flask backend to PythonAnywhere.
 
 ```bash
 # In PythonAnywhere Bash Console
-cd /home/username
-git clone https://github.com/yourusername/your-repo.git mysite
+cd /home/peterpeterlight
+git clone https://github.com/yourpeterpeterlight/your-repo.git mysite
 cd mysite
 ```
 
@@ -40,19 +40,19 @@ Use the PythonAnywhere file browser to upload your `flask_backend` folder.
 3. Or in bash:
 
 ```bash
-cd /home/username/mysite
+cd /home/peterpeterlight/mysite
 mkvirtualenv --python=/usr/bin/python3.9 mysite
 pip install -r requirements.txt
 ```
 
-4. Back in Web settings, set the virtualenv path to `/home/username/.virtualenvs/mysite`
+4. Back in Web settings, set the virtualenv path to `/home/peterpeterlight/.virtualenvs/mysite`
 
 ## Step 4: Create and Configure .env File
 
 In PythonAnywhere bash:
 
 ```bash
-cd /home/username/mysite
+cd /home/peterpeterlight/mysite
 cp .env.example .env
 nano .env
 ```
@@ -62,7 +62,7 @@ nano .env
 ```
 FLASK_ENV=production
 SECRET_KEY=<generate-random-string-here>
-DATABASE_URL=sqlite:////home/username/mysite/backend.db
+DATABASE_URL=sqlite:////home/peterpeterlight/mysite/backend.db
 ALLOW_SQLITE_PRODUCTION=True
 FRONTEND_ORIGIN=https://yourdomain.com
 VAPID_PUBLIC_KEY=<your-public-key>
@@ -74,8 +74,10 @@ To generate `SECRET_KEY`:
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
-
-To generate VAPID keys:
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+python -c "from pywebpush import generate_keys; print(generate_keys())"
+To generate VAPID keys: PiLwQQECmCddey-MabYBGER6biD_gx_-HWzP44zz_qs
 ```bash
 python3 -c "from pywebpush import generate_keys; import json; print(json.dumps(generate_keys(), indent=2))"
 ```
@@ -83,7 +85,7 @@ python3 -c "from pywebpush import generate_keys; import json; print(json.dumps(g
 ## Step 5: Initialize Database
 
 ```bash
-cd /home/username/mysite
+cd /home/peterpeterlight/mysite
 workon mysite
 python database.py init
 ```
@@ -114,7 +116,7 @@ import sys
 import os
 
 # Add your project to the path
-path = '/home/username/mysite'
+path = '/home/peterpeterlight/mysite'
 if path not in sys.path:
     sys.path.append(path)
 
@@ -133,8 +135,8 @@ Save the file.
 
 In PythonAnywhere Web settings:
 
-- **Virtualenv**: `/home/username/.virtualenvs/mysite`
-- **WSGI configuration file**: `/var/www/username_pythonanywhere_com_wsgi.py`
+- **Virtualenv**: `/home/peterpeterlight/.virtualenvs/mysite`
+- **WSGI configuration file**: `/var/www/peterpeterlight_pythonanywhere_com_wsgi.py`
 - **Python version**: 3.9 (or higher)
 
 Under "Web app setup":
@@ -143,7 +145,7 @@ Under "Web app setup":
 ## Step 10: Reload and Test
 
 1. Click **Reload** button in Web settings
-2. Visit your URL: `https://username.pythonanywhere.com/api/v1/push/vapid-public-key`
+2. Visit your URL: `https://peterpeterlight.pythonanywhere.com/api/v1/push/vapid-public-key`
 3. You should see JSON: `{"publicKey": "..."}`
 
 ## Step 11: Test the Full API
@@ -151,7 +153,7 @@ Under "Web app setup":
 ### Test Pairing
 
 ```bash
-curl -X POST https://username.pythonanywhere.com/api/v1/pairing/redeem \
+curl -X POST https://peterpeterlight.pythonanywhere.com/api/v1/pairing/redeem \
   -H "Content-Type: application/json" \
   -d '{"code": "GEN4821"}'
 ```
@@ -170,7 +172,7 @@ Expected response:
 ```bash
 ACCESS_TOKEN="<token from pairing above>"
 
-curl -X GET https://username.pythonanywhere.com/api/v1/machines/hw-000123/status \
+curl -X GET https://peterpeterlight.pythonanywhere.com/api/v1/machines/hw-000123/status \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
@@ -183,12 +185,12 @@ See the testing section in `README.md` for full HMAC signing example.
 In your frontend build, set the API base URL to:
 
 ```
-https://username.pythonanywhere.com
+https://peterpeterlight.pythonanywhere.com
 ```
 
 The app will call:
-- `https://username.pythonanywhere.com/api/v1/pairing/redeem`
-- `https://username.pythonanywhere.com/api/v1/machines/{id}/status`
+- `https://peterpeterlight.pythonanywhere.com/api/v1/pairing/redeem`
+- `https://peterpeterlight.pythonanywhere.com/api/v1/machines/{id}/status`
 - etc.
 
 ## Updating Code
@@ -196,7 +198,7 @@ The app will call:
 When you update your code on GitHub:
 
 ```bash
-cd /home/username/mysite
+cd /home/peterpeterlight/mysite
 git pull
 workon mysite
 pip install -r requirements.txt
@@ -208,14 +210,14 @@ Then click **Reload** in PythonAnywhere Web settings.
 
 Your SQLite database is at:
 ```
-/home/username/mysite/backend.db
+/home/peterpeterlight/mysite/backend.db
 ```
 
 **Important**: Back this up regularly!
 
 ```bash
 # Download via PythonAnywhere file browser, or:
-cp /home/username/mysite/backend.db /home/username/mysite/backend.db.backup
+cp /home/peterpeterlight/mysite/backend.db /home/peterpeterlight/mysite/backend.db.backup
 ```
 
 ## Database Options
@@ -223,7 +225,7 @@ cp /home/username/mysite/backend.db /home/username/mysite/backend.db.backup
 For the PythonAnywhere free plan, use SQLite on the persistent home directory:
 
 ```
-DATABASE_URL=sqlite:////home/username/mysite/backend.db
+DATABASE_URL=sqlite:////home/peterpeterlight/mysite/backend.db
 ALLOW_SQLITE_PRODUCTION=True
 ```
 
@@ -239,7 +241,7 @@ SQLite is suitable for a low-traffic single-worker deployment. Paid plans can us
 View error logs:
 1. In Web settings, scroll to "Log files"
 2. Click on "Error log"
-3. Or in bash: `tail -f /var/log/username_pythonanywhere_com_error.log`
+3. Or in bash: `tail -f /var/log/peterpeterlight_pythonanywhere_com_error.log`
 
 ## Troubleshooting
 

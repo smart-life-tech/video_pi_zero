@@ -332,3 +332,17 @@ See `../flask_backend/README.md` for full backend API spec and testing examples.
 2. **I'll add the code** to read liquid level and post to backend
 3. **You configure environment variables** on the Pi
 4. **Test the integration** with live data flow
+
+## Generated 5 pairing codes for hw-000123:
+  OVO-4791
+  ECR-6055
+  WBZ-7720
+  KCA-8347
+  UDX-4054
+
+## Generated 5 pairing codes for hw-000124:
+  OCR-5664
+  TGL-2459
+  MSX-3689
+  KMV-4667
+  DXU-0576
