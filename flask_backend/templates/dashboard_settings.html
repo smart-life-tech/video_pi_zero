@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Machine Monitor Settings</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LIQUID LEVEL NETWORK</p>
+        <h1>Machine settings</h1>
+      </div>
+      <div class="controls">
+        <label class="token-field">
+          <span>Dashboard token</span>
+          <input id="token" type="password" autocomplete="off" placeholder="Enter token">
+        </label>
+        <a class="link-button" href="/dashboard">Back to monitor</a>
+      </div>
+    </header>
+
+    <section class="admin-panel" aria-label="Developer controls">
+      <h2>Developer controls</h2>
+      <div class="admin-grid">
+        <form id="seed-form" class="admin-form">
+          <h3>Create or update machine</h3>
+          <label>
+            <span>Machine ID</span>
+            <input id="seed-machine-id" type="text" value="hw-000123" required>
+          </label>
+          <label>
+            <span>Name</span>
+            <input id="seed-name" type="text" value="Test Machine" required>
+          </label>
+          <label>
+            <span>Device secret</span>
+            <input id="seed-secret" type="text" value="MY_DEVICE_SECRET" required>
+          </label>
+          <label>
+            <span>Key ID</span>
+            <select id="seed-key-id">
+              <option value="v1" selected>v1</option>
+              <option value="v2">v2</option>
+            </select>
+          </label>
+          <button type="submit">Create / update machine</button>
+        </form>
+
+        <form id="codes-form" class="admin-form">
+          <h3>Generate pairing codes</h3>
+          <label>
+            <span>Machine ID</span>
+            <input id="codes-machine-id" type="text" value="hw-000123" required>
+          </label>
+          <label>
+            <span>Code count</span>
+            <input id="codes-count" type="number" min="1" max="100" value="5" required>
+          </label>
+          <button type="submit">Generate codes</button>
+        </form>
+
+        <form id="delete-form" class="admin-form">
+          <h3>Delete machine</h3>
+          <label>
+            <span>Machine ID</span>
+            <input id="delete-machine-id" type="text" value="hw-000123" required>
+          </label>
+          <button type="submit">Delete machine</button>
+        </form>
+      </div>
+      <pre id="admin-result" class="admin-result" aria-live="polite">Enter the dashboard token to unlock controls.</pre>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='settings.js') }}"></script>
+</body>
+</html>

@@ -118,6 +118,27 @@ def test_seed_machine_via_developer_api(client, app):
     assert data['keyId'] == 'v1'
 
 
+def test_delete_machine_via_developer_api(client, app):
+    """Developer can delete a machine via API."""
+    app.config['DASHBOARD_TOKEN'] = 'developer-token'
+
+    client.post(
+        '/api/v1/developer/machines',
+        headers={'X-Dashboard-Token': 'developer-token'},
+        json={'machineId': 'hw-000123', 'name': 'Test Machine', 'secret': 'MY_DEVICE_SECRET', 'keyId': 'v1'}
+    )
+
+    response = client.delete(
+        '/api/v1/developer/machines/hw-000123',
+        headers={'X-Dashboard-Token': 'developer-token'}
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data['machineId'] == 'hw-000123'
+    assert data['deleted'] is True
+
+
 def test_pairing_code_normalization(client, setup_machine):
     """Test pairing code normalization (case-insensitive, non-alphanumerics ignored)."""
     # All of these should work

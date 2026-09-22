@@ -22,7 +22,7 @@ import logging
 from config import Config
 from models import (
     db, Machine, PairingCode, Subscription, DeviceSecret, StatusReading,
-    IngestRequest, RateLimitBucket,
+    IngestRequest, RateLimitBucket, AccessToken,
 )
 from auth import verify_hmac_signature
 from state_machine import StateManager
@@ -272,6 +272,33 @@ def create_app(config_class=Config):
             'status': 'created' if created else 'updated'
         }), 200
 
+    @app.route('/api/v1/developer/machines/<machine_id>', methods=['DELETE'])
+    @app.route('/api/v1/admin/machines/<machine_id>', methods=['DELETE'])
+    def delete_machine(machine_id):
+        """Delete a machine and its related secrets/codes. Intended for developer/admin use."""
+        dashboard_token = app.config.get('DASHBOARD_TOKEN', '')
+        provided_token = request.headers.get('X-Dashboard-Token', '')
+        if not dashboard_token or not hmac.compare_digest(provided_token, dashboard_token):
+            return error_response('unauthorized', 'Dashboard token required'), 401
+
+        machine = Machine.query.get(machine_id)
+        if not machine:
+            return error_response('machine_not_found', 'Machine not found'), 404
+
+        DeviceSecret.query.filter_by(machine_id=machine_id).delete()
+        PairingCode.query.filter_by(machine_id=machine_id).delete()
+        Subscription.query.filter_by(machine_id=machine_id).delete()
+        StatusReading.query.filter_by(machine_id=machine_id).delete()
+        AccessToken.query.filter_by(machine_id=machine_id).delete()
+        db.session.delete(machine)
+        db.session.commit()
+
+        return jsonify({
+            'machineId': machine_id,
+            'deleted': True,
+            'status': 'deleted'
+        }), 200
+
     @app.route('/api/v1/developer/machines/<machine_id>/pairing-codes', methods=['POST'])
     @app.route('/api/v1/admin/machines/<machine_id>/pairing-codes', methods=['POST'])
     def generate_machine_pairing_codes(machine_id):
@@ -322,6 +349,10 @@ def create_app(config_class=Config):
     @app.route('/dashboard', methods=['GET'])
     def dashboard():
         return render_template('dashboard.html')
+
+    @app.route('/dashboard/settings', methods=['GET'])
+    def dashboard_settings():
+        return render_template('dashboard_settings.html')
     
     # ==================== PUSH SUBSCRIPTIONS ====================
     @app.route('/api/v1/push/subscriptions', methods=['POST'])
