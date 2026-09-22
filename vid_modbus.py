@@ -903,9 +903,28 @@ def main():
         print("Could not configure Ethernet network for PLC")
         return
 
+    log.info("Attempting Modbus TCP connection to PLC at %s:%s", MODBUS_SERVER_IP, MODBUS_SERVER_PORT)
+    print(f"Attempting Modbus TCP connection to PLC at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
     if not connect_modbus():
-        print("Could not connect to Modbus PLC")
+        log.error("Startup Modbus connection failed: PLC unreachable at %s:%s", MODBUS_SERVER_IP, MODBUS_SERVER_PORT)
+        print(f"Startup Modbus connection failed: PLC unreachable at {MODBUS_SERVER_IP}:{MODBUS_SERVER_PORT}")
         return
+
+    log.info("Modbus connection successful at startup; PLC reachable.")
+    print("Modbus connection successful at startup; PLC reachable.")
+
+    # Explicit startup value so the backend sees a registration/heartbeat immediately.
+    try:
+        startup_response = post_liquid_status("ok", None)
+        log.info(
+            "Startup backend status sent: status=%s body=%s",
+            startup_response.status_code,
+            startup_response.text[:200],
+        )
+        print(f"Startup backend status sent: {startup_response.status_code}")
+    except Exception as exc:
+        log.warning("Startup backend status failed: %s", exc)
+        print(f"Startup backend status failed: {exc}")
 
     print("Monitoring coils 0-4 (rising edge only). Ctrl+C to exit.")
     last_states = [False] * 5
