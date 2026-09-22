@@ -33,6 +33,15 @@ button:hover { background: #056861; }
 .summary span, #updated { color: var(--muted); font: 12px Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; }
 #updated { margin-left: auto; text-transform: none; letter-spacing: 0; }
 .message { min-height: 20px; color: var(--muted); font: 14px Arial, sans-serif; }
+.admin-panel { margin-top: 20px; padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
+.admin-panel h2 { margin: 0 0 20px; font-size: 24px; }
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.admin-form { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: #f8faf8; }
+.admin-form h3 { margin: 0; font-size: 18px; }
+.admin-form label { display: grid; gap: 6px; color: var(--muted); font: 11px Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; }
+.admin-form input, .admin-form select { width: 100%; height: 40px; border: 1px solid var(--line); border-radius: 5px; padding: 0 10px; font: 15px Arial, sans-serif; }
+.admin-form button { margin-top: 4px; }
+.admin-result { margin: 18px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font: 12px/1.5 monospace; white-space: pre-wrap; word-break: break-word; min-height: 40px; }
 .machine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
 .machine { padding: 22px; background: var(--card); border: 1px solid var(--line); border-radius: 7px; box-shadow: var(--shadow); }
 .machine-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
