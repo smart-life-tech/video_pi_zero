@@ -875,8 +875,8 @@ def main():
         return
 
     # Let user choose language before launching VLC; then load language-specific videos
-    chosen_lang = show_language_selector()
-    LANGUAGE = chosen_lang
+    #chosen_lang = show_language_selector()
+    LANGUAGE = "en"
     log.info(f"Language selected: {LANGUAGE}")
 
     load_video_files_for_language(LANGUAGE)
