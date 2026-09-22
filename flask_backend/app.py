@@ -10,6 +10,8 @@ import math
 import re
 import hashlib
 import hmac
+import secrets
+import string
 import time
 from datetime import timedelta
 from typing import Optional
@@ -215,6 +217,107 @@ def create_app(config_class=Config):
                 'secondsSinceSeen': round(age) if age is not None else None,
             })
         return jsonify({'machines': machines, 'serverTime': now.strftime('%Y-%m-%dT%H:%M:%SZ')}), 200
+
+    @app.route('/api/v1/developer/machines', methods=['POST'])
+    @app.route('/api/v1/admin/machines', methods=['POST'])
+    @app.route('/api/v1/developer/machines/<machine_id>', methods=['POST'])
+    @app.route('/api/v1/admin/machines/<machine_id>', methods=['POST'])
+    def seed_machine_via_api(machine_id=None):
+        """Create or update a machine and its HMAC device secret. Mirrors `database.py seed`."""
+        dashboard_token = app.config.get('DASHBOARD_TOKEN', '')
+        provided_token = request.headers.get('X-Dashboard-Token', '')
+        if not dashboard_token or not hmac.compare_digest(provided_token, dashboard_token):
+            return error_response('unauthorized', 'Dashboard token required'), 401
+
+        data = request.get_json(silent=True) or {}
+        machine_id = machine_id or data.get('machineId') or data.get('id')
+        name = data.get('name')
+        secret = data.get('secret')
+        key_id = data.get('keyId', 'v1')
+
+        if not machine_id:
+            return error_response('invalid_request', 'machineId is required'), 400
+        if not name:
+            return error_response('invalid_request', 'name is required'), 400
+        if not secret:
+            return error_response('invalid_request', 'secret is required'), 400
+
+        machine = Machine.query.get(machine_id)
+        created = machine is None
+        if machine:
+            machine.name = name
+        else:
+            machine = Machine(id=machine_id, name=name)
+            db.session.add(machine)
+
+        secret_record = DeviceSecret.query.filter_by(machine_id=machine_id, key_id=key_id).first()
+        if secret_record:
+            secret_record.secret = secret
+            secret_record.active = True
+            secret_record.rotated_at = datetime.now(timezone.utc)
+        else:
+            db.session.add(DeviceSecret(
+                machine_id=machine_id,
+                key_id=key_id,
+                secret=secret,
+                active=True,
+                rotated_at=datetime.now(timezone.utc)
+            ))
+
+        db.session.commit()
+        return jsonify({
+            'machineId': machine_id,
+            'name': machine.name,
+            'keyId': key_id,
+            'status': 'created' if created else 'updated'
+        }), 200
+
+    @app.route('/api/v1/developer/machines/<machine_id>/pairing-codes', methods=['POST'])
+    @app.route('/api/v1/admin/machines/<machine_id>/pairing-codes', methods=['POST'])
+    def generate_machine_pairing_codes(machine_id):
+        """Generate one-time pairing codes for a machine. Intended for developer/admin use."""
+        dashboard_token = app.config.get('DASHBOARD_TOKEN', '')
+        provided_token = request.headers.get('X-Dashboard-Token', '')
+        if not dashboard_token or not hmac.compare_digest(provided_token, dashboard_token):
+            return error_response('unauthorized', 'Dashboard token required'), 401
+
+        data = request.get_json(silent=True) or {}
+        count = data.get('count', 1)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return error_response('invalid_count', 'count must be an integer'), 400
+
+        if count < 1 or count > 100:
+            return error_response('invalid_count', 'count must be between 1 and 100'), 400
+
+        machine = Machine.query.get(machine_id)
+        if not machine:
+            return error_response('machine_not_found', 'Machine not found'), 404
+
+        generated = []
+        seen_codes = set()
+
+        while len(generated) < count:
+            prefix = ''.join(secrets.choice(string.ascii_uppercase) for _ in range(3))
+            suffix = ''.join(secrets.choice(string.digits) for _ in range(4))
+            code = f'{prefix}-{suffix}'
+            normalized = code.replace('-', '')
+
+            if normalized in seen_codes or PairingCode.query.filter_by(code=normalized).first():
+                continue
+
+            seen_codes.add(normalized)
+            generated.append(code)
+            db.session.add(PairingCode(code=normalized, machine_id=machine_id))
+
+        db.session.commit()
+
+        return jsonify({
+            'machineId': machine_id,
+            'count': len(generated),
+            'codes': generated,
+        }), 200
 
     @app.route('/dashboard', methods=['GET'])
     def dashboard():

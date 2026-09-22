@@ -32,16 +32,43 @@ python database.py init
 
 ### 4. Add your first machine
 
+CLI equivalent:
+
 ```bash
 python database.py seed hw-000123 "My Machine" "super-secret-key"
+```
+
+Direct API equivalent:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/developer/machines \
+  -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "machineId": "hw-000123",
+    "name": "Test Machine",
+    "secret": "MY_DEVICE_SECRET",
+    "keyId": "v1"
+  }'
 ```
 
 The secret must match what's in your Pi's firmware.
 
 ### 5. Generate pairing codes
 
+CLI equivalent:
+
 ```bash
 python database.py codes hw-000123 5
+```
+
+Direct API equivalent:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/developer/machines/hw-000123/pairing-codes \
+  -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"count": 5}'
 ```
 
 Print these on your machine's sticker. Each code is single-use.
@@ -98,7 +125,7 @@ gunicorn -w 4 -b 0.0.0.0:5000 app:app
    os.environ['FRONTEND_ORIGIN'] = 'https://yourdomain.com'
    ```
 
-5. **Initialize database**
+5. **Initialize database and provision the first machine**
    - In PythonAnywhere bash:
    ```bash
    cd /home/username/mysite
@@ -106,6 +133,17 @@ gunicorn -w 4 -b 0.0.0.0:5000 app:app
    python database.py init
    python database.py seed hw-000123 "Name" "secret"
    python database.py codes hw-000123
+   ```
+   - Or use the equivalent developer API:
+   ```bash
+   curl -X POST https://<your-app>.pythonanywhere.com/api/v1/developer/machines \
+     -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"machineId":"hw-000123","name":"Name","secret":"secret","keyId":"v1"}'
+   curl -X POST https://<your-app>.pythonanywhere.com/api/v1/developer/machines/hw-000123/pairing-codes \
+     -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"count": 5}'
    ```
 
 6. **Configure WSGI file**
@@ -167,6 +205,20 @@ python database.py seed hw-000456 "Genesis — Moto Zagos" "my-shared-secret"
 python database.py codes hw-000456 5
 ```
 
+The same actions are available via the developer API:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/developer/machines \
+  -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"machineId":"hw-000456","name":"Genesis — Moto Zagos","secret":"MY_DEVICE_SECRET","keyId":"v1"}'
+
+curl -X POST http://localhost:5000/api/v1/developer/machines/hw-000456/pairing-codes \
+  -H "X-Dashboard-Token: $DASHBOARD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"count": 5}'
+```
+
 ## API Endpoints
 
 All endpoints are under `/api/v1`:
@@ -174,6 +226,8 @@ All endpoints are under `/api/v1`:
 | Endpoint | Auth | From | Description |
 | --- | --- | --- | --- |
 | `POST /pairing/redeem` | None | App | Enter pairing code |
+| `POST /developer/machines` | Dashboard token | Developer | Create/update machine and HMAC secret (CLI equivalent of `database.py seed`) |
+| `POST /developer/machines/{id}/pairing-codes` | Dashboard token | Developer | Generate machine pairing codes (CLI equivalent of `database.py codes`) |
 | `GET /machines/{id}/status` | Bearer | App | Poll machine state (every 30s) |
 | `GET /push/vapid-public-key` | None | App | Get Web Push public key |
 | `POST /push/subscriptions` | Bearer | App | Register for notifications |

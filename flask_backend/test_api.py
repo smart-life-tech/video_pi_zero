@@ -79,6 +79,45 @@ def test_pairing_invalid_code(client):
     assert data['error']['code'] == 'invalid_pairing_code'
 
 
+def test_generate_pairing_codes_via_developer_api(client, app, setup_machine):
+    """Developer can generate pairing codes via authenticated API."""
+    app.config['DASHBOARD_TOKEN'] = 'developer-token'
+
+    response = client.post(
+        '/api/v1/developer/machines/hw-000123/pairing-codes',
+        headers={'X-Dashboard-Token': 'developer-token'},
+        json={'count': 5}
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data['machineId'] == 'hw-000123'
+    assert len(data['codes']) == 5
+    assert all('-' in code for code in data['codes'])
+
+
+def test_seed_machine_via_developer_api(client, app):
+    """Developer can create/update machine and device secret via API."""
+    app.config['DASHBOARD_TOKEN'] = 'developer-token'
+
+    response = client.post(
+        '/api/v1/developer/machines',
+        headers={'X-Dashboard-Token': 'developer-token'},
+        json={
+            'machineId': 'hw-000123',
+            'name': 'Test Machine',
+            'secret': 'MY_DEVICE_SECRET',
+            'keyId': 'v1'
+        }
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data['machineId'] == 'hw-000123'
+    assert data['name'] == 'Test Machine'
+    assert data['keyId'] == 'v1'
+
+
 def test_pairing_code_normalization(client, setup_machine):
     """Test pairing code normalization (case-insensitive, non-alphanumerics ignored)."""
     # All of these should work
