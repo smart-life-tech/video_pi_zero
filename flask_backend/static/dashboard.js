@@ -1,5 +1,6 @@
 const tokenInput = document.querySelector('#token');
 const refreshButton = document.querySelector('#refresh');
+const settingsButton = document.querySelector('#settings');
 const message = document.querySelector('#message');
 const machineGrid = document.querySelector('#machines');
 const total = document.querySelector('#total');
@@ -64,9 +65,11 @@ async function loadMachines() {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error?.message || `Request failed (${response.status})`);
     renderMachines(body);
+    settingsButton.classList.remove('hidden');
   } catch (error) {
     message.textContent = error.message;
     machineGrid.innerHTML = '';
+    settingsButton.classList.add('hidden');
   }
 }
 

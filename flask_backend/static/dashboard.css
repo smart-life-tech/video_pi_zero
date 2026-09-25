@@ -35,6 +35,7 @@ button:hover { background: #056861; }
 .message { min-height: 20px; color: var(--muted); font: 14px Arial, sans-serif; }
 .link-button { display: inline-flex; align-items: center; justify-content: center; height: 42px; padding: 0 18px; border: 1px solid var(--teal); border-radius: 5px; background: var(--teal); color: white; text-decoration: none; font: 15px Arial, sans-serif; }
 .link-button:hover { background: #056861; }
+.hidden { display: none !important; }
 .admin-panel { margin-top: 20px; padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
 .admin-panel h2 { margin: 0 0 20px; font-size: 24px; }
 .admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
